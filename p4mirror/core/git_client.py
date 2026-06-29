@@ -1,0 +1,206 @@
+"""Wrapper around the Git CLI for P4Mirror.
+
+Handles staging, committing (with metadata), pushing, and pulling.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+from datetime import datetime
+from pathlib import Path
+from typing import Mapping
+
+
+# Regex for git-p4 changelist marker in commit messages.
+# Format: [git-p4: depot-paths = "//REPOSITORY/": change = 280791]
+_RE_GIT_P4 = re.compile(
+    r"\[git-p4:\s+depot-paths\s*=\s*\"(?P<depot_paths>[^\"]+)\":\s+change\s*=\s*(?P<cl>\d+)\]"
+)
+
+
+class GitError(Exception):
+    """Raised when a ``git`` command exits with a non-zero status."""
+
+
+class GitClient:
+    """High-level Git operations for migration.
+
+    Parameters
+    ----------
+    workspace_root : str or Path
+        Root of the local Git repository.
+    default_branch : str
+        Branch to push/pull against (e.g. ``"main"``).
+    """
+
+    def __init__(
+        self,
+        workspace_root: str | Path,
+        default_branch: str = "main",
+    ) -> None:
+        self._root = Path(workspace_root)
+        self._branch = default_branch
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def fetch(self) -> None:
+        """Run ``git fetch origin``."""
+        self._run("fetch", "origin")
+
+    def pull_ff_only(self) -> None:
+        """Run ``git pull --ff-only origin {branch}``."""
+        self._run("pull", "--ff-only", "origin", self._branch)
+
+    def checkout_branch(self, branch: str | None = None) -> None:
+        """Switch to *branch*, creating it if it doesn't exist locally.
+
+        Uses ``git checkout -B {branch}`` to reset to the remote
+        tracking branch if it already exists.
+        """
+        target = branch or self._branch
+        self._run("checkout", "-B", target, f"origin/{target}")
+        self._run("checkout", "-B", target)
+
+    def stage_all(self) -> None:
+        """Stage all changes (adds, modifications, deletes) via ``git add -A``."""
+        self._run("add", "-A")
+
+    def commit(
+        self,
+        author_name: str,
+        author_email: str,
+        timestamp: datetime,
+        message: str,
+    ) -> None:
+        """Create a Git commit with preserved Perforce metadata.
+
+        Parameters
+        ----------
+        author_name : str
+            Git author name (mapped from Perforce user).
+        author_email : str
+            Git author email (mapped from Perforce user).
+        timestamp : datetime
+            Original Perforce changelist timestamp.
+        message : str
+            Commit message (Perforce changelist description).
+        """
+        env = self._git_env(author_name, author_email, timestamp)
+        self._run("commit", f"--message={message}", extra_env=env)
+
+    def push(self) -> None:
+        """Push commits to ``origin/{branch}``."""
+        self._run("push", "origin", self._branch)
+
+    # -- Git history scan (state fallback) --------------------------------
+
+    def scan_last_p4_cl(
+        self,
+        git_paths: list[str],
+        branch: str | None = None,
+        max_commits: int = 5000,
+    ) -> int | None:
+        """Scan Git history for the latest P4 changelist affecting *git_paths*.
+
+        Looks for the ``[git-p4: ... change = N]`` marker in commit messages
+        and only visits commits that touched the given paths (Git does the
+        filtering internally).  Returns the highest changelist number found,
+        or ``None`` if no matching commit exists.
+
+        This is used as a fallback when ``state.json`` is missing.
+        """
+        target = branch or self._branch
+
+        stdout = self._run(
+            "log", target,
+            f"--max-count={max_commits}",
+            "--format=%H%n%B%n---P4MIRROR-BOUNDARY---%n",
+            "--",
+            *git_paths,
+        )
+
+        entries = stdout.split("\n---P4MIRROR-BOUNDARY---\n")
+        max_cl: int | None = None
+
+        for entry in entries:
+            entry = entry.strip()
+            if not entry:
+                continue
+            # First line = SHA, rest = body
+            parts = entry.split("\n", 1)
+            if len(parts) < 2:
+                continue
+            body = parts[1]
+            m = _RE_GIT_P4.search(body)
+            if m:
+                cl = int(m.group("cl"))
+                if max_cl is None or cl > max_cl:
+                    max_cl = cl
+
+        return max_cl
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _run(self, *args: str, extra_env: Mapping[str, str] | None = None) -> str:
+        """Execute a ``git`` command inside the workspace root.
+
+        Parameters
+        ----------
+        *args
+            Git subcommand and arguments (e.g. ``"add", "-A"``).
+        extra_env
+            Optional environment variables to set for this invocation.
+
+        Raises
+        ------
+        GitError
+            If the command exits with a non-zero status.
+        """
+        cmd = ["git", *args]
+
+        env = os.environ.copy()
+        if extra_env:
+            env.update(extra_env)
+
+        result = subprocess.run(
+            cmd,
+            cwd=str(self._root),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+        if result.returncode != 0:
+            raise GitError(
+                f"git {' '.join(args)!r} failed (exit {result.returncode}):\n"
+                f"{result.stderr.strip()}"
+            )
+        return result.stdout
+
+    @staticmethod
+    def _git_env(
+        author_name: str,
+        author_email: str,
+        timestamp: datetime,
+    ) -> dict[str, str]:
+        """Build environment variables for a metadata-preserving commit.
+
+        Both ``GIT_AUTHOR_*`` and ``GIT_COMMITTER_*`` are set to the
+        same values so that ``git log`` shows the original Perforce
+        author and date.
+        """
+        date_str = timestamp.strftime("%Y-%m-%dT%H:%M:%S")
+        return {
+            "GIT_AUTHOR_NAME": author_name,
+            "GIT_AUTHOR_EMAIL": author_email,
+            "GIT_AUTHOR_DATE": date_str,
+            "GIT_COMMITTER_NAME": author_name,
+            "GIT_COMMITTER_EMAIL": author_email,
+            "GIT_COMMITTER_DATE": date_str,
+        }

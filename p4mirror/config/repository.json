@@ -1,0 +1,20 @@
+{
+    "repository_name": "ApplicationA",
+    "p4_port": "perforce.company.com:1666",
+    "p4_user": "jenkins",
+    "p4_client": "jenkins-AppA-mirror",
+    "workspace_root": "D:/Jenkins/ApplicationA",
+    "github_url": "https://github.com/company/ApplicationA.git",
+    "default_branch": "main",
+    "sparse_checkout": true,
+    "path_mappings": [
+        {
+            "p4_path": "//RFB/AppA/...",
+            "git_path": "AppA"
+        },
+        {
+            "p4_path": "//RFB/AppC/...",
+            "git_path": "AppC"
+        }
+    ]
+}

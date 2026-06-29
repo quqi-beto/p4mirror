@@ -1,0 +1,6 @@
+[project]
+name = "p4mirror"
+version = "0.1.0"
+description = "Incremental Perforce to GitHub Migration Framework"
+requires-python = ">=3.10"
+dependencies = []
