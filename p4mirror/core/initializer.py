@@ -10,6 +10,7 @@ work incrementally from the discovered baseline changelist.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from config import RepositoryConfig
@@ -31,6 +32,7 @@ class InitError(Exception):
 def run_init(
     config: RepositoryConfig,
     *,
+    github_token: str | None = None,
     log_dir: str | Path = "logs",
     state_dir: str | Path = "state",
 ) -> None:
@@ -40,6 +42,10 @@ def run_init(
     ----------
     config : RepositoryConfig
         Repository migration configuration.
+    github_token : str or None
+        GitHub token (JWT or PAT) for authenticated Git operations.
+        Falls back to the ``GITHUB_TOKEN`` environment variable if not
+        provided.
     log_dir : str or Path
         Directory for log files.
     state_dir : str or Path
@@ -50,6 +56,8 @@ def run_init(
     InitError
         On any fatal error during initialisation.
     """
+    if github_token is None:
+        github_token = os.environ.get("GITHUB_TOKEN")
     logger = P4MirrorLogger(log_dir=log_dir)
     logger.start()
 
@@ -60,6 +68,7 @@ def run_init(
             config=config,
             logger=logger,
             state_dir=state_dir,
+            github_token=github_token,
             errors=errors,
         )
     except InitError:
@@ -90,6 +99,7 @@ def _run_init_impl(
     config: RepositoryConfig,
     logger: P4MirrorLogger,
     state_dir: str | Path,
+    github_token: str | None,
     errors: list[str],
 ) -> None:
     """Internal init logic — extracted for clean error handling."""
@@ -124,12 +134,22 @@ def _run_init_impl(
             errors.append(str(exc))
             raise InitError() from exc
 
-    # -- 4. Fetch from GitHub (partial clone) ---------------------------
-    logger.info("Fetching from GitHub (partial clone) ...")
+    # -- 4. Configure GitHub auth (if token provided) -------------------
     git = GitClient(
         workspace_root=workspace_root,
         default_branch=config.default_branch,
     )
+    if github_token:
+        logger.info("Configuring GitHub authentication ...")
+        try:
+            git.configure_github_auth(github_token, config.github_url)
+        except GitError as exc:
+            logger.error(str(exc))
+            errors.append(str(exc))
+            raise InitError() from exc
+
+    # -- 5. Fetch from GitHub (partial clone) ---------------------------
+    logger.info("Fetching from GitHub (partial clone) ...")
     try:
         git.fetch_with_filter(branch=config.default_branch)
     except GitError as exc:
@@ -137,7 +157,7 @@ def _run_init_impl(
         errors.append(str(exc))
         raise InitError() from exc
 
-    # -- 5. Checkout branch ---------------------------------------------
+    # -- 6. Checkout branch ---------------------------------------------
     logger.info(f"Checking out branch '{config.default_branch}' ...")
     try:
         git.checkout_branch()
@@ -146,7 +166,7 @@ def _run_init_impl(
         errors.append(str(exc))
         raise InitError() from exc
 
-    # -- 6. Scan git-p4 markers for baseline CL -------------------------
+    # -- 7. Scan git-p4 markers for baseline CL -------------------------
     logger.info("Scanning Git history for last Perforce changelist ...")
     try:
         scanned_cl = git.scan_last_p4_cl(git_paths)
@@ -168,7 +188,7 @@ def _run_init_impl(
 
     logger.info(f"Baseline changelist determined: {scanned_cl}")
 
-    # -- 7. Write state.json --------------------------------------------
+    # -- 8. Write state.json --------------------------------------------
     logger.info("Writing state file ...")
     try:
         state_mgr = StateManager(state_dir=state_dir)

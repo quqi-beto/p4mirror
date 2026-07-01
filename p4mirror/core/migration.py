@@ -7,6 +7,7 @@ update state.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -33,6 +34,7 @@ def run_migration(
     config: RepositoryConfig,
     user_mapping: dict[str, UserMapping],
     *,
+    github_token: str | None = None,
     build_number: int | None = None,
     log_dir: str | Path = "logs",
     state_dir: str | Path = "state",
@@ -57,6 +59,9 @@ def run_migration(
     MigrationError
         On any fatal error during the migration process.
     """
+    if github_token is None:
+        github_token = os.environ.get("GITHUB_TOKEN")
+
     # ------------------------------------------------------------------
     # Bootstrap
     # ------------------------------------------------------------------
@@ -73,6 +78,7 @@ def run_migration(
             user_mapping=user_mapping,
             logger=logger,
             state_dir=state_dir,
+            github_token=github_token,
             errors=errors,
         )
     except MigrationError:
@@ -99,6 +105,7 @@ def _run_migration_impl(
     user_mapping: dict[str, UserMapping],
     logger: P4MirrorLogger,
     state_dir: str | Path,
+    github_token: str | None,
     errors: list[str],
 ) -> tuple[int, int]:
     """Internal migration logic — extracted for clean error handling.
@@ -147,6 +154,14 @@ def _run_migration_impl(
         workspace_root=workspace_root,
         default_branch=config.default_branch,
     )
+    if github_token:
+        logger.info("Configuring GitHub authentication ...")
+        try:
+            git.configure_github_auth(github_token, config.github_url)
+        except GitError as exc:
+            logger.error(str(exc))
+            errors.append(str(exc))
+            raise MigrationError() from exc
 
     # -- 5. Read migration state (with Git history fallback) -------------
     logger.info("Reading migration state ...")

@@ -1,6 +1,7 @@
 """Wrapper around the Git CLI for P4Mirror.
 
-Handles staging, committing (with metadata), pushing, and pulling.
+Handles staging, committing (with metadata), pushing, pulling, and
+GitHub token-based authentication.
 """
 
 from __future__ import annotations
@@ -110,6 +111,42 @@ class GitClient:
     def push(self) -> None:
         """Push commits to ``origin/{branch}``."""
         self._run("push", "origin", self._branch)
+
+    # -- GitHub token authentication --------------------------------------
+
+    def configure_github_auth(self, token: str, remote_url: str | None = None) -> None:
+        """Configure the origin remote to use a GitHub token for authentication.
+
+        Rewrites the remote URL so that all subsequent Git operations
+        (fetch, pull, push) authenticate with the given token.
+
+        For GitHub Apps the token is embedded as:
+        ``https://x-access-token:{token}@{host}/{owner}/{repo}``
+
+        .. note::
+
+           Only ``https://`` URLs are rewritten — ``git@`` (SSH) and local
+           ``file://`` paths are left untouched since they do not support
+           token-based authentication.
+
+        Parameters
+        ----------
+        token : str
+            GitHub token (JWT for a GitHub App, or a personal access token).
+        remote_url : str or None
+            The full remote URL. If ``None``, reads it from Git
+            (``git remote get-url origin``).
+        """
+        if remote_url is None:
+            remote_url = self._run("remote", "get-url", "origin").strip()
+
+        # Only inject token into HTTPS URLs; SSH and local paths are
+        # left as-is since they don't support token auth.
+        if remote_url.startswith("https://"):
+            scheme, rest = remote_url.split("://", 1)
+            auth_url = f"{scheme}://x-access-token:{token}@{rest}"
+            self._run("remote", "set-url", "origin", auth_url)
+        # else: SSH (git@...) or local path → no change needed
 
     # -- Git history scan (state fallback) --------------------------------
 

@@ -20,6 +20,7 @@ defaults to the ``migrate`` command.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from config import ConfigError, load_repository_config, load_user_mapping
@@ -50,6 +51,14 @@ def _parse_args() -> argparse.Namespace:
             "(default: %(default)s; not used by init)"
         ),
     )
+    p_init.add_argument(
+        "--github-token",
+        default=None,
+        help=(
+            "GitHub token (JWT or PAT) for authenticated Git operations. "
+            "Falls back to GITHUB_TOKEN env var."
+        ),
+    )
 
     # -- migrate subcommand -----------------------------------------------
     p_migrate = subparsers.add_parser(
@@ -71,6 +80,14 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Jenkins build number (optional, logged if provided)",
+    )
+    p_migrate.add_argument(
+        "--github-token",
+        default=None,
+        help=(
+            "GitHub token (JWT or PAT) for authenticated Git operations. "
+            "Falls back to GITHUB_TOKEN env var."
+        ),
     )
 
     # -- Handle backward compatibility ------------------------------------
@@ -95,23 +112,36 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
 
-    # -- Load configuration -----------------------------------------------
+    # -- Load config (shared) --------------------------------------------
     try:
         config = load_repository_config(args.config)
-        user_mapping = load_user_mapping(args.users)
     except ConfigError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    # -- Resolve token: CLI arg > env var --------------------------------
+    github_token = args.github_token or os.environ.get("GITHUB_TOKEN")
 
     # -- Route to the appropriate command ---------------------------------
     if args.command == "init":
         from core.initializer import run_init
 
-        run_init(config=config)
+        run_init(
+            config=config,
+            github_token=github_token,
+        )
     else:
+        # Users mapping is only needed for migration
+        try:
+            user_mapping = load_user_mapping(args.users)
+        except ConfigError as exc:
+            print(f"Configuration error: {exc}", file=sys.stderr)
+            sys.exit(1)
+
         run_migration(
             config=config,
             user_mapping=user_mapping,
+            github_token=github_token,
             build_number=args.build_number,
         )
 

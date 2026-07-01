@@ -113,6 +113,27 @@ Maps Perforce usernames to Git author identities.
 Unmapped users fall back to their Perforce username and an email fetched
 via `p4 user -o`.
 
+## GitHub Authentication
+
+P4Mirror authenticates with GitHub by embedding a token into the Git remote
+URL.  The token can be provided via the ``--github-token`` CLI flag or the
+``GITHUB_TOKEN`` environment variable.
+
+```bash
+# Via CLI flag
+uv run python migrate.py init --github-token "ghs_xxxxxxxxxxxx"
+
+# Via environment variable (recommended for Jenkins)
+set GITHUB_TOKEN=ghs_xxxxxxxxxxxx
+uv run python migrate.py init
+```
+
+For a **GitHub App**, use the app's JWT as the token. Git will authenticate
+using ``https://x-access-token:{token}@github.com/...``.
+
+The token is required whenever P4Mirror needs to fetch from or push to
+GitHub — i.e. both ``init`` and ``migrate`` commands.
+
 ## Usage
 
 ### Step 1 — One-time workspace initialisation
