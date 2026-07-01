@@ -13,3 +13,4 @@ wheels/
 logs/
 temp/
 state/
+config/config.json

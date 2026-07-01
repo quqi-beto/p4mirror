@@ -52,6 +52,7 @@ cd D:\Jenkins\ApplicationA
 # Install dependencies (creates .venv automatically)
 uv sync
 ```
+If something about cert went wrong try this: set UV_INSECURE_HOST=github.com
 
 ## Configuration
 
