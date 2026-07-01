@@ -51,6 +51,21 @@ class GitClient:
         """Run ``git fetch origin``."""
         self._run("fetch", "origin")
 
+    def fetch_with_filter(self, branch: str | None = None) -> None:
+        """Fetch a single branch using partial clone filter.
+
+        Uses ``git fetch origin {branch} --filter=blob:none`` so that only
+        blob objects for the sparse-checkout paths are downloaded.
+        This is used during ``p4mirror init`` for an efficient initial clone.
+
+        Parameters
+        ----------
+        branch : str or None
+            Branch to fetch. Defaults to the configured default branch.
+        """
+        target = branch or self._branch
+        self._run("fetch", "origin", target, "--filter=blob:none")
+
     def pull_ff_only(self) -> None:
         """Run ``git pull --ff-only origin {branch}``."""
         self._run("pull", "--ff-only", "origin", self._branch)

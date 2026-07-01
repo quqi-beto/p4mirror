@@ -41,6 +41,39 @@ def validate_workspace(config: RepositoryConfig) -> Path:
     return root
 
 
+def ensure_workspace(config: RepositoryConfig) -> Path:
+    """Ensure the workspace root directory exists, creating it if needed.
+
+    Creates the full directory path if it does not already exist.
+    This is used during ``p4mirror init`` to bootstrap a fresh workspace.
+
+    Returns
+    -------
+    Path
+        The resolved workspace root path.
+
+    Raises
+    ------
+    WorkspaceError
+        If the path exists but is not a directory, or cannot be created.
+    """
+    root = Path(config.workspace_root).resolve()
+    if root.exists():
+        if not root.is_dir():
+            raise WorkspaceError(
+                f"Workspace root is not a directory: {root}"
+            )
+        return root
+
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise WorkspaceError(
+            f"Cannot create workspace directory {root}: {exc}"
+        ) from exc
+    return root
+
+
 def init_git_repo(workspace_root: Path, github_url: str) -> None:
     """Initialise a Git repository if one does not already exist.
 

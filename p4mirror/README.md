@@ -114,13 +114,27 @@ via `p4 user -o`.
 
 ## Usage
 
-```bash
-# Basic run
-uv run python migrate.py
+### Step 1 — One-time workspace initialisation
 
-# With custom config and build number
-uv run python migrate.py --config config/my_repo.json --build-number 1234
+```bash
+uv run python migrate.py init
+uv run python migrate.py init --config config/my_repo.json
 ```
+
+This clones the GitHub repository (with sparse checkout for the mapped
+paths), scans git-p4 markers to find the last Perforce changelist already
+in GitHub, and writes ``state/state.json``.  After this step, the workspace
+is ready for incremental migration.
+
+### Step 2 — Incremental migration (Jenkins)
+
+```bash
+uv run python migrate.py migrate
+uv run python migrate.py migrate --config config/my_repo.json --build-number 1234
+```
+
+For backward compatibility, running ``python migrate.py`` without a
+subcommand is treated as ``python migrate.py migrate``.
 
 ## Jenkins Job Setup
 
@@ -138,7 +152,26 @@ uv run python migrate.py
 
 No Pipeline script required.
 
-## How It Works
+## Workspace Initialisation (`init`)
+
+On a fresh setup, the workspace has no Git history and no ``state.json``.
+The ``init`` command bootstraps it:
+
+1. Create the workspace directory (if missing).
+2. Initialise a Git repository with ``origin`` pointing to GitHub.
+3. Configure sparse checkout for the mapped paths (e.g. ``AppA``, ``AppC``).
+4. Fetch the default branch from GitHub using a **partial clone**
+   (``--filter=blob:none``) — only blob objects for sparse paths are
+   downloaded, keeping the clone fast and small.
+5. Checkout the branch.
+6. Scan Git history for ``[git-p4: ... change = N]`` markers to find the
+   last Perforce changelist that is already represented in GitHub.
+7. Write ``state/state.json`` with that changelist as the baseline.
+
+After ``init`` completes, the workspace is ready for incremental
+migration.  No manual editing of ``state.json`` is required.
+
+## Incremental Migration (`migrate`)
 
 Every execution follows this workflow:
 
@@ -188,10 +221,12 @@ Every execution follows this workflow:
 ## Adding a New Repository
 
 1. Create a new Perforce workspace for the depot path.
-2. Create a new Git repository on GitHub.
+2. Create a new Git repository on GitHub (the GitHub team will populate it
+   with git-p4 markers in the commit history).
 3. Copy the P4Mirror directory to a new Jenkins workspace root.
 4. Edit `config/repository.json` with the new settings.
-5. Set up the `state/state.json` with the starting changelist number.
+5. Run ``uv run python migrate.py init`` to bootstrap the workspace
+   (clone, discover baseline CL, write ``state.json``).
 6. Create a new Jenkins freestyle job pointing to this directory.
 7. No Python code changes required.
 
@@ -208,6 +243,7 @@ P4Mirror/
 │   ├── __init__.py
 │   ├── changelist.py         # Changelist data model
 │   ├── git_client.py         # Git CLI wrapper
+│   ├── initializer.py        # One-time workspace init
 │   ├── logger.py             # Timestamped logging
 │   ├── migration.py          # Orchestration logic
 │   ├── p4_client.py          # Perforce CLI wrapper
