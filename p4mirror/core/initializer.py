@@ -140,7 +140,7 @@ def _run_init_impl(
     # -- 2. Initialise Git repo -----------------------------------------
     logger.info("Initialising Git repository ...")
     try:
-        init_git_repo(workspace_root, config.github_url)
+        init_git_repo(workspace_root, config.github_url, github_token)
     except WorkspaceError as exc:
         logger.error(str(exc))
         errors.append(str(exc))
@@ -156,40 +156,12 @@ def _run_init_impl(
             errors.append(str(exc))
             raise InitError() from exc
 
-    # -- 4. Configure GitHub auth (if token provided) -------------------
+    # -- 4. Scan git-p4 markers for baseline CL -------------------------
+    logger.info("Scanning Git history for last Perforce changelist ...")
     git = GitClient(
         workspace_root=workspace_root,
         default_branch=config.default_branch,
     )
-    if github_token:
-        logger.info("Configuring GitHub authentication ...")
-        try:
-            git.configure_github_auth(github_token, config.github_url)
-        except GitError as exc:
-            logger.error(str(exc))
-            errors.append(str(exc))
-            raise InitError() from exc
-
-    # -- 5. Fetch from GitHub (partial clone) ---------------------------
-    logger.info("Fetching from GitHub (partial clone) ...")
-    try:
-        git.fetch_with_filter(branch=config.default_branch)
-    except GitError as exc:
-        logger.error(str(exc))
-        errors.append(str(exc))
-        raise InitError() from exc
-
-    # -- 6. Checkout branch ---------------------------------------------
-    logger.info(f"Checking out branch '{config.default_branch}' ...")
-    try:
-        git.checkout_branch()
-    except GitError as exc:
-        logger.error(str(exc))
-        errors.append(str(exc))
-        raise InitError() from exc
-
-    # -- 7. Scan git-p4 markers for baseline CL -------------------------
-    logger.info("Scanning Git history for last Perforce changelist ...")
     try:
         scanned_cl = git.scan_last_p4_cl(git_paths)
     except GitError as exc:
@@ -210,7 +182,7 @@ def _run_init_impl(
 
     logger.info(f"Baseline changelist determined: {scanned_cl}")
 
-    # -- 8. Write state.json --------------------------------------------
+    # -- 5. Write state.json --------------------------------------------
     logger.info("Writing state file ...")
     try:
         state_mgr = StateManager(state_dir=state_dir)

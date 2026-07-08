@@ -74,18 +74,21 @@ def ensure_workspace(config: RepositoryConfig) -> Path:
     return root
 
 
-def init_git_repo(workspace_root: Path, github_url: str) -> None:
-    """Initialise a Git repository if one does not already exist.
+def init_git_repo(workspace_root: Path, github_url: str, github_token: str) -> None:
+    """Initialise a Git repository via a shallow, authenticated clone.
 
-    If ``.git`` is missing, runs ``git init`` and adds *github_url*
-    as the ``origin`` remote.
+    Runs ``git clone --depth 1 --filter=blob:none --sparse`` with the
+    GitHub token embedded in the URL, so authentication is handled in a
+    single step.  If ``.git`` already exists the call is a no-op.
     """
     git_dir = workspace_root / ".git"
     if git_dir.exists():
         return  # already a repository
 
-    _run_git(workspace_root, "init")
-    _run_git(workspace_root, "remote", "add", "origin", github_url)
+    scheme, rest = github_url.split("://", 1)
+    auth_url = f"{scheme}://x-access-token:{github_token}@{rest}"
+
+    _run_git(workspace_root, "clone", "--depth", "1", "--filter=blob:none", "--sparse", auth_url, ".")
 
 
 def setup_sparse_checkout(
