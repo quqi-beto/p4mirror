@@ -16,6 +16,7 @@ from pathlib import Path
 from config import RepositoryConfig
 from core.git_client import GitClient, GitError
 from core.logger import P4MirrorLogger
+from core.p4_client import P4Client, P4Error
 from core.state_manager import StateManager, StateError
 from core.workspace import (
     WorkspaceError,
@@ -111,6 +112,27 @@ def _run_init_impl(
     try:
         workspace_root = ensure_workspace(config)
     except WorkspaceError as exc:
+        logger.error(str(exc))
+        errors.append(str(exc))
+        raise InitError() from exc
+
+    # -- 1b. Ensure P4 client workspace exists --------------------------
+    logger.info(
+        f"Ensuring P4 client workspace '{config.p4_client}' ..."
+    )
+    p4 = P4Client(
+        p4_port=config.p4_port,
+        p4_user=config.p4_user,
+        p4_client=config.p4_client,
+        p4_repository=config.repository_name
+    )
+    view_mappings = config.view_mappings
+    try:
+        p4.ensure_client_workspace(
+            workspace_root=config.workspace_root,
+            view_mappings=view_mappings,
+        )
+    except P4Error as exc:
         logger.error(str(exc))
         errors.append(str(exc))
         raise InitError() from exc

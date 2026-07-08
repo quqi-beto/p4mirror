@@ -163,6 +163,20 @@ def _run_migration_impl(
             errors.append(str(exc))
             raise MigrationError() from exc
 
+    # -- 4b. Validate P4 client workspace exists -------------------------
+    logger.info(f"Verifying P4 client workspace '{config.p4_client}' ...")
+    try:
+        p4.run_command("client", "-o", config.p4_client)
+    except P4Error:
+        msg = (
+            f"P4 client workspace '{config.p4_client}' does not exist. "
+            f"Run 'p4mirror init --config {Path.cwd() / 'config/repository.json'}' "
+            f"first to create it."
+        )
+        logger.error(msg)
+        errors.append(msg)
+        raise MigrationError() from None
+
     # -- 5. Read migration state (with Git history fallback) -------------
     logger.info("Reading migration state ...")
     state_mgr = StateManager(state_dir=state_dir)

@@ -38,6 +38,7 @@ class RepositoryConfig:
     default_branch: str
     sparse_checkout: bool = False
     path_mappings: list[PathMapping] = field(default_factory=list)
+    view_mappings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,8 @@ def load_repository_config(path: str | Path) -> RepositoryConfig:
         mappings.append(PathMapping(p4_path=p4_path, git_path=git_path))
 
     kwargs["path_mappings"] = mappings
+
+    kwargs["view_mappings"] = data.get("view_mappings", [])
 
     return RepositoryConfig(**kwargs)
 

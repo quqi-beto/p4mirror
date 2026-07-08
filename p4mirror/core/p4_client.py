@@ -50,12 +50,14 @@ class P4Client:
         p4_port: str,
         p4_user: str,
         p4_client: str,
+        p4_repository: str,
         p4_executable: str | Path = "p4",
     ) -> None:
         self._p4 = p4_executable
         self._port = p4_port
         self._user = p4_user
         self._client = p4_client
+        self._repository = p4_repository
 
     # ------------------------------------------------------------------
     # Public API
@@ -140,6 +142,82 @@ class P4Client:
         single changelist.
         """
         self.run_command("-c", client_name, "sync", f"//...@{cl_id}")
+
+    # -- Client workspace management ---------------------------------------
+
+    def ensure_client_workspace(
+        self,
+        workspace_root: str,
+        view_mappings: list[str],
+        description: str = "Created by P4Mirror",
+    ) -> None:
+        """Create or update the Perforce client workspace spec.
+
+        Builds a complete client workspace specification from the provided
+        parameters and submits it via ``p4 client -i``.  This is idempotent
+        — if the client already exists it will be updated to match the
+        desired spec.
+
+        Parameters
+        ----------
+        workspace_root : str
+            Absolute local filesystem path for the workspace ``Root:`` field.
+        view_mappings : list of (depot_path, client_path) tuples
+            Each tuple maps a Perforce depot path (e.g. ``//RFB/AppA/...``)
+            to a client-relative path (e.g. ``AppA``).  These become the
+            ``View:`` lines.
+        description : str
+            Optional description text for the client spec.
+
+        Raises
+        ------
+        P4Error
+            If the ``p4 client -i`` command fails.
+        """
+        spec_lines = [
+            f"Client:\t{self._client}",
+            "",
+            f"Owner:\t{self._user}",
+            "",
+            "Description:",
+            f"\t{description}",
+            "",
+            f"Root:\t{workspace_root}",
+            "",
+            "Options:\tnoallwrite noclobber nocompress unlocked nomodtime normdir",
+            "",
+            "LineEnd:\tlocal",
+            "",
+            "View:",
+        ]
+        
+        for depot_name in view_mappings:
+            spec_lines.append(
+                f"\t//{depot_name}/... //{self._client}/{depot_name}/..."
+            )
+
+        spec_lines.append("")  # trailing newline
+
+        spec = "\n".join(spec_lines)
+
+        cmd = [
+            str(self._p4),
+            "-p", self._port,
+            "-u", self._user,
+            "client", "-i",
+        ]
+        result = subprocess.run(
+            cmd,
+            input=spec,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise P4Error(
+                f"Failed to create/update client workspace "
+                f"{self._client!r}:\n{result.stderr.strip()}"
+            )
 
     # -- User info ---------------------------------------------------------
 
