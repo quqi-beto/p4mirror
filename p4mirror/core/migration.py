@@ -127,7 +127,7 @@ def _run_migration_impl(
     # -- 2. Initialise / verify Git repo ---------------------------------
     logger.info("Initialising Git repository (if needed) ...")
     try:
-        init_git_repo(workspace_root, config.github_url)
+        init_git_repo(workspace_root, config.github_url, github_token)
     except WorkspaceError as exc:
         logger.error(str(exc))
         errors.append(str(exc))
@@ -149,6 +149,7 @@ def _run_migration_impl(
         p4_port=config.p4_port,
         p4_user=config.p4_user,
         p4_client=config.p4_client,
+        p4_repository=config.repository_name
     )
     git = GitClient(
         workspace_root=workspace_root,

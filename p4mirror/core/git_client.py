@@ -213,7 +213,7 @@ class GitClient:
             params = urllib.parse.urlencode({
                 "path": gp,
                 "sha": self._branch,
-                "per_page": "100",
+                "per_page": "30",
             })
             url = f"https://api.github.com/repos/{repo_full_name}/commits?{params}"
 
@@ -237,6 +237,7 @@ class GitClient:
                 m = _RE_GIT_P4.search(commit_msg)
                 if m:
                     cl = int(m.group("cl"))
+                    print(f"Found git-p4 marker for path {gp!r}: CL {cl}")
                     if max_cl is None or cl > max_cl:
                         max_cl = cl
                     break  # newest match for this path
