@@ -6,9 +6,13 @@ GitHub token-based authentication.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Mapping
@@ -23,6 +27,26 @@ _RE_GIT_P4 = re.compile(
 
 class GitError(Exception):
     """Raised when a ``git`` command exits with a non-zero status."""
+
+
+class GitHubAPIError(Exception):
+    """Raised when the GitHub API returns a non-2xx status or the request fails."""
+
+
+def _parse_repo_full_name(github_url: str) -> str:
+    """Extract ``{owner}/{repo}`` from a GitHub URL.
+
+    Examples
+    --------
+    >>> _parse_repo_full_name("https://github.com/company/ApplicationA.git")
+    'company/ApplicationA'
+    >>> _parse_repo_full_name("https://github.com/company/ApplicationA")
+    'company/ApplicationA'
+    """
+    url = github_url.rstrip("/")
+    if url.endswith(".git"):
+        url = url[:-4]
+    return urllib.parse.urlparse(url).path.strip("/")
 
 
 class GitClient:
@@ -153,45 +177,69 @@ class GitClient:
     def scan_last_p4_cl(
         self,
         git_paths: list[str],
-        branch: str | None = None,
-        max_commits: int = 5000,
+        github_token: str,
+        repo_full_name: str,
     ) -> int | None:
-        """Scan Git history for the latest P4 changelist affecting *git_paths*.
+        """Scan GitHub commit history for the latest P4 changelist affecting *git_paths*.
 
-        Looks for the ``[git-p4: ... change = N]`` marker in commit messages
-        and only visits commits that touched the given paths (Git does the
-        filtering internally).  Returns the highest changelist number found,
-        or ``None`` if no matching commit exists.
+        Uses the GitHub Commits API (``GET /repos/{owner}/{repo}/commits``)
+        with a ``path`` filter so only commits that actually touched files
+        under *git_paths* are examined.  For each path up to 100 commits are
+        fetched; the first one carrying a ``[git-p4: ... change = N]`` marker
+        is used.  Returns the highest changelist number across all paths, or
+        ``None`` if no match is found.
 
-        This is used as a fallback when ``state.json`` is missing.
+        Parameters
+        ----------
+        git_paths : list[str]
+            Git paths (directories) to filter commits by.
+        github_token : str
+            GitHub API token (PAT or installation token).
+        repo_full_name : str
+            Repository full name, e.g. ``"company/ApplicationA"``.
+
+        Raises
+        ------
+        GitHubAPIError
+            If the API request fails or returns a non-2xx status.
         """
-        target = branch or self._branch
-
-        stdout = self._run(
-            "log", target,
-            f"--max-count={max_commits}",
-            "--format=%H%n%B%n---P4MIRROR-BOUNDARY---%n",
-            "--",
-            *git_paths,
-        )
-
-        entries = stdout.split("\n---P4MIRROR-BOUNDARY---\n")
         max_cl: int | None = None
+        headers = {
+            "Authorization": f"Bearer {github_token}",
+            "Accept": "application/vnd.github+json",
+        }
 
-        for entry in entries:
-            entry = entry.strip()
-            if not entry:
-                continue
-            # First line = SHA, rest = body
-            parts = entry.split("\n", 1)
-            if len(parts) < 2:
-                continue
-            body = parts[1]
-            m = _RE_GIT_P4.search(body)
-            if m:
-                cl = int(m.group("cl"))
-                if max_cl is None or cl > max_cl:
-                    max_cl = cl
+        for gp in git_paths:
+            params = urllib.parse.urlencode({
+                "path": gp,
+                "sha": self._branch,
+                "per_page": "100",
+            })
+            url = f"https://api.github.com/repos/{repo_full_name}/commits?{params}"
+
+            req = urllib.request.Request(url, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data: list[dict] = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                raise GitHubAPIError(
+                    f"GitHub API returned {exc.code} for path {gp!r}: {body}"
+                ) from exc
+            except (urllib.error.URLError, OSError) as exc:
+                raise GitHubAPIError(
+                    f"GitHub API request failed for path {gp!r}: {exc}"
+                ) from exc
+
+            # Iterate newest-first; pick the first commit with a git-p4 marker
+            for item in data:
+                commit_msg = item.get("commit", {}).get("message", "")
+                m = _RE_GIT_P4.search(commit_msg)
+                if m:
+                    cl = int(m.group("cl"))
+                    if max_cl is None or cl > max_cl:
+                        max_cl = cl
+                    break  # newest match for this path
 
         return max_cl
 

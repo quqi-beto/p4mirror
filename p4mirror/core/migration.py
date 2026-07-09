@@ -13,7 +13,7 @@ from pathlib import Path
 
 from config import RepositoryConfig, UserMapping
 from core.changelist import Changelist
-from core.git_client import GitClient, GitError
+from core.git_client import GitClient, GitError, GitHubAPIError, _parse_repo_full_name
 from core.logger import P4MirrorLogger
 from core.p4_client import P4Client, P4Error
 from core.state_manager import StateManager, StateError
@@ -189,7 +189,12 @@ def _run_migration_impl(
         logger.info("Falling back to scanning Git history for last P4 changelist ...")
         git_paths = [m.git_path for m in config.path_mappings]
         try:
-            scanned_cl = git.scan_last_p4_cl(git_paths)
+            repo_full = _parse_repo_full_name(config.github_url)
+            scanned_cl = git.scan_last_p4_cl(
+                git_paths,
+                github_token=github_token,
+                repo_full_name=repo_full,
+            )
             if scanned_cl is not None:
                 last_cl = scanned_cl
                 logger.info(f"Found last P4 changelist from Git history: {last_cl}")

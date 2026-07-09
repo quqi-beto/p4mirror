@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 
 from config import RepositoryConfig
-from core.git_client import GitClient, GitError
+from core.git_client import GitClient, GitError, GitHubAPIError, _parse_repo_full_name
 from core.logger import P4MirrorLogger
 from core.p4_client import P4Client, P4Error
 from core.state_manager import StateManager, StateError
@@ -163,8 +163,13 @@ def _run_init_impl(
         default_branch=config.default_branch,
     )
     try:
-        scanned_cl = git.scan_last_p4_cl(git_paths)
-    except GitError as exc:
+        repo_full = _parse_repo_full_name(config.github_url)
+        scanned_cl = git.scan_last_p4_cl(
+            git_paths,
+            github_token=github_token,
+            repo_full_name=repo_full,
+        )
+    except (GitError, GitHubAPIError) as exc:
         logger.error(str(exc))
         errors.append(str(exc))
         raise InitError() from exc
