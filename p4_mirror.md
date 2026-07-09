@@ -252,7 +252,7 @@ Example
 ```
 state/
 
-    state.json
+    state_ApplicationA.json    # Per-repository state file
 ```
 Contents
 ```json

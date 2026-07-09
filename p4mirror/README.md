@@ -145,7 +145,7 @@ uv run python migrate.py init --config config/my_repo.json
 
 This clones the GitHub repository (with sparse checkout for the mapped
 paths), scans git-p4 markers to find the last Perforce changelist already
-in GitHub, and writes ``state/state.json``.  After this step, the workspace
+in GitHub, and writes a per-repository state file (``state/state_<repo_name>.json``).  After this step, the workspace
 is ready for incremental migration.
 
 ### Step 2 — Incremental migration (Jenkins)
@@ -176,7 +176,7 @@ No Pipeline script required.
 
 ## Workspace Initialisation (`init`)
 
-On a fresh setup, the workspace has no Git history and no ``state.json``.
+On a fresh setup, the workspace has no Git history and no per-repository state file.
 The ``init`` command bootstraps it:
 
 1. Create the workspace directory (if missing).
@@ -188,10 +188,10 @@ The ``init`` command bootstraps it:
 5. Checkout the branch.
 6. Scan Git history for ``[git-p4: ... change = N]`` markers to find the
    last Perforce changelist that is already represented in GitHub.
-7. Write ``state/state.json`` with that changelist as the baseline.
+7. Write ``state/state_<repo_name>.json`` with that changelist as the baseline.
 
 After ``init`` completes, the workspace is ready for incremental
-migration.  No manual editing of ``state.json`` is required.
+migration.  No manual editing of the state file is required.
 
 ## Incremental Migration (`migrate`)
 
@@ -201,7 +201,8 @@ Every execution follows this workflow:
 2. Validate the workspace directory exists.
 3. Initialise Git repository (if first run).
 4. Set up sparse checkout (if enabled).
-5. Read the last migrated changelist from `state/state.json`.
+5. Read the last migrated changelist from the per-repository state file
+   (e.g. `state/state_ApplicationA.json`).
 6. Fetch and pull latest Git changes (`git pull --ff-only`).
 7. Query Perforce for newer changelists affecting configured paths.
 8. For each changelist (oldest first):
@@ -209,7 +210,7 @@ Every execution follows this workflow:
    - Stage all changes in Git (`git add -A`).
    - Create a Git commit with the original author, date, and message.
 9. Push all commits to GitHub.
-10. Update `state/state.json` with the latest migrated changelist.
+10. Update the per-repository state file with the latest migrated changelist.
 
 ## State File
 
@@ -222,7 +223,7 @@ Every execution follows this workflow:
 }
 ```
 
-- Stored at `state/state.json`.
+- Stored per-repository at `state/state_<repository_name>.json` (e.g. `state/state_ApplicationA.json`).
 - If the file is missing, empty, or contains an invalid changelist number,
   P4Mirror falls back to scanning the Git commit history for the last
   Perforce changelist (by looking for the ``[git-p4: ... change = N]``
@@ -248,7 +249,7 @@ Every execution follows this workflow:
 3. Copy the P4Mirror directory to a new Jenkins workspace root.
 4. Edit `config/repository.json` with the new settings.
 5. Run ``uv run python migrate.py init`` to bootstrap the workspace
-   (clone, discover baseline CL, write ``state.json``).
+   (clone, discover baseline CL, write per-repository state file).
 6. Create a new Jenkins freestyle job pointing to this directory.
 7. No Python code changes required.
 
@@ -272,7 +273,7 @@ P4Mirror/
 │   ├── state_manager.py      # State file read/write
 │   └── workspace.py          # Workspace operations
 ├── state/
-│   └── state.json            # Migration state (auto-generated)
+│   └── state_<repo>.json     # Per-repo migration state (auto-generated)
 ├── logs/                     # Run log files (auto-generated)
 ├── temp/
 ├── pyproject.toml

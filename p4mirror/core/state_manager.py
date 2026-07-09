@@ -1,6 +1,8 @@
 """Reads and writes P4Mirror migration state.
 
-Uses a JSON state file (``state/state.json``) for extensibility.
+State is stored per-repository so that multiple repositories can be
+migrated independently.  Each repository gets its own file under the
+state directory (e.g. ``state/state_ApplicationA.json``).
 """
 
 from __future__ import annotations
@@ -30,14 +32,24 @@ class State:
 class StateManager:
     """Manages persistence of migration state.
 
+    State is stored per-repository so that multiple repositories can be
+    migrated independently without clobbering each other's checkpoint.
+
     Parameters
     ----------
+    repository_name : str
+        Repository name used to derive the state file name
+        (e.g. ``state/state_ApplicationA.json``).
     state_dir : str or Path
-        Directory where ``state.json`` is stored.
+        Directory where per-repository state files are stored.
     """
 
-    def __init__(self, state_dir: str | Path = "state") -> None:
-        self._path = Path(state_dir) / "state.json"
+    def __init__(
+        self,
+        repository_name: str,
+        state_dir: str | Path = "state",
+    ) -> None:
+        self._path = Path(state_dir) / f"state_{repository_name}.json"
 
     # ------------------------------------------------------------------
     # Public API

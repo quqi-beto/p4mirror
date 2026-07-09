@@ -178,7 +178,8 @@ def _run_init_impl(
         msg = (
             "No git-p4 markers found in the repository history. "
             "Cannot determine the baseline Perforce changelist. "
-            "If you know the initial CL, set it manually in state/state.json "
+            f"If you know the initial CL, set it manually in "
+            f"state/state_{config.repository_name}.json "
             "and run 'p4mirror migrate'."
         )
         logger.error(msg)
@@ -187,10 +188,13 @@ def _run_init_impl(
 
     logger.info(f"Baseline changelist determined: {scanned_cl}")
 
-    # -- 5. Write state.json --------------------------------------------
+    # -- 5. Write state file --------------------------------------------
     logger.info("Writing state file ...")
     try:
-        state_mgr = StateManager(state_dir=state_dir)
+        state_mgr = StateManager(
+            repository_name=config.repository_name,
+            state_dir=state_dir,
+        )
         state_mgr.write(
             scanned_cl,
             repository=config.repository_name,

@@ -180,7 +180,10 @@ def _run_migration_impl(
 
     # -- 5. Read migration state (with Git history fallback) -------------
     logger.info("Reading migration state ...")
-    state_mgr = StateManager(state_dir=state_dir)
+    state_mgr = StateManager(
+        repository_name=config.repository_name,
+        state_dir=state_dir,
+    )
     try:
         state = state_mgr.read()
         last_cl = state.last_migrated_cl
