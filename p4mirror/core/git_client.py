@@ -179,15 +179,18 @@ class GitClient:
         git_paths: list[str],
         github_token: str,
         repo_full_name: str,
-    ) -> int | None:
-        """Scan GitHub commit history for the latest P4 changelist affecting *git_paths*.
+    ) -> dict[str, int]:
+        """Scan GitHub commit history for the latest P4 changelist per gitPath.
 
         Uses the GitHub Commits API (``GET /repos/{owner}/{repo}/commits``)
         with a ``path`` filter so only commits that actually touched files
-        under *git_paths* are examined.  For each path up to 100 commits are
+        under *git_paths* are examined.  For each path up to 30 commits are
         fetched; the first one carrying a ``[git-p4: ... change = N]`` marker
-        is used.  Returns the highest changelist number across all paths, or
-        ``None`` if no match is found.
+        is used.
+
+        Returns a dict mapping each gitPath to its latest P4 changelist
+        found in the commit history.  Paths with no git-p4 marker are
+        omitted from the result.
 
         Parameters
         ----------
@@ -203,7 +206,7 @@ class GitClient:
         GitHubAPIError
             If the API request fails or returns a non-2xx status.
         """
-        max_cl: int | None = None
+        result: dict[str, int] = {}
         headers = {
             "Authorization": f"Bearer {github_token}",
             "Accept": "application/vnd.github+json",
@@ -238,11 +241,10 @@ class GitClient:
                 if m:
                     cl = int(m.group("cl"))
                     print(f"Found git-p4 marker for path {gp!r}: CL {cl}")
-                    if max_cl is None or cl > max_cl:
-                        max_cl = cl
+                    result[gp] = cl
                     break  # newest match for this path
 
-        return max_cl
+        return result
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -106,11 +106,13 @@ P4Mirror/
 
         migration.py
 
+        initializer.py
+
         logger.py
 
     state/
 
-        last\_cl.txt
+        state_<repo>.json
 
     logs/
 
@@ -188,17 +190,17 @@ Every Jenkins execution performs the following:
 
     3. Verify Perforce workspace exists.
 
-    4. Read last migrated changelist.
+    4. Read per-path baselines from state file.
 
-    5. Query Perforce for newer changelists.
+    5. Query Perforce for newer changelists — **per gitPath** each from its own baseline.
 
-    6. Sort changelists from oldest to newest.
+    6. Union and sort changelists from oldest to newest.
 
-    7. Process each changelist.
+    7. For each changelist: determine affected gitPaths, sync only those paths, commit.
 
     8. Push all commits to GitHub.
 
-    9. Save latest processed changelist.
+    9. Save per-path state (each path's highest processed CL).
 
 # Changelist Processing
 
@@ -246,7 +248,8 @@ Fixed login timeout.
 ```
 # State Management
 
-The framework stores only the latest successfully migrated changelist.
+The framework tracks a `last_migrated_cl` per gitPath within a repository,
+stored in a single per-repository JSON file.
 
 Example
 ```
@@ -257,21 +260,37 @@ state/
 Contents
 ```json
 {
-    "last_migrated_cl": 58321,
+    "paths": {
+        "AppA": { "last_migrated_cl": 58321 },
+        "AppC": { "last_migrated_cl": 58100 }
+    },
     "repository": "ApplicationA",
     "branch": "main",
-    "last_run": "2026-06-25T10:15:30+00:00"
+    "last_run": "2026-07-10T10:15:30+00:00"
 }
 ```
+Each gitPath queries Perforce from its own baseline, so paths can progress
+independently.  A changelist is only synced for the paths it actually
+affects (determined from the file list).
+
 If the state file doesn't exist, is empty, or contains an invalid changelist
 number, P4Mirror falls back to scanning the Git commit history for the last
-Perforce changelist.  It looks for the ``[git-p4: ... change = N]`` marker
+Perforce changelist **per gitPath**.  It looks for the ``[git-p4: ... change = N]`` marker
 in commits that touched the configured sparse-checkout paths.  If a matching
-commit is found, the state is reconstructed automatically.  If no matching
+commit is found, per-path state is reconstructed automatically.  If no matching
 commit exists, the application stops with an error.
 
-If Jenkins stops unexpectedly, the next execution resumes from the next
-changelist.
+Legacy state files with a single `last_migrated_cl` are auto-converted on
+read.
+
+If Jenkins stops unexpectedly, the next execution resumes from the last
+saved per-path CL.
+
+## Cross-Path Changelists
+
+If a single Perforce changelist modifies files in multiple gitPaths (e.g.
+both AppA and AppC), all affected paths are synced and committed together
+in one Git commit.  The per-path state advances for each affected path.
 
 # Logging
 

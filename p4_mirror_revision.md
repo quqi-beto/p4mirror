@@ -30,19 +30,21 @@ This revision incorporates the design decisions discussed during the review, inc
 
 · Load configuration and user mappings.
 
-· Read migration state (last migrated changelist).
+· Read per-path baselines from state file.
 
-· Discover all newer Perforce changelists.
+· Discover newer Perforce changelists — **each gitPath queries from its own baseline**.
 
-· Filter changelists to those affecting configured paths.
+· Union results, sort oldest to newest.
 
-· Sort oldest to newest.
-
-· For each relevant changelist: sync workspace to that changelist, stage changes, create one Git commit preserving author, timestamp and message.
+· For each changelist:
+  - Fetch details to determine which gitPaths are affected.
+  - Sync only the affected depot paths (per-path sync).
+  - Stage changes, create one Git commit preserving author, timestamp and message.
+  - Track per-path progress.
 
 · Push commits to GitHub.
 
-· Update migration state.
+· Update per-path state independently.
 
 ## **Important Rules**
 
@@ -52,9 +54,15 @@ This revision incorporates the design decisions discussed during the review, inc
 
 · Run 'git fetch' and 'git pull --ff-only' before creating new commits.
 
-## **Suggested State File**
+## **State File**
 
-· Use a JSON state file (last\_migrated\_cl, repository, branch, last\_run) instead of a plain text file for future extensibility.
+· Use a JSON state file with per-gitPath tracking instead of a single `last_migrated_cl`.
+
+· Each gitPath has its own `last_migrated_cl` so paths can progress independently.
+
+· Legacy single-CL format is auto-converted on read.
+
+· Cross-path changelists (modifying multiple gitPaths) sync all affected paths in one pass.
 
 ## **Long-Term Vision**
 

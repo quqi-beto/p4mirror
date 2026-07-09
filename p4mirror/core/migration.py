@@ -11,12 +11,12 @@ import os
 import sys
 from pathlib import Path
 
-from config import RepositoryConfig, UserMapping
-from core.changelist import Changelist
+from config import PathMapping, RepositoryConfig, UserMapping
+from core.changelist import ChangedFile, Changelist
 from core.git_client import GitClient, GitError, GitHubAPIError, _parse_repo_full_name
 from core.logger import P4MirrorLogger
 from core.p4_client import P4Client, P4Error
-from core.state_manager import StateManager, StateError
+from core.state_manager import PathState, State, StateManager, StateError
 from core.workspace import (
     WorkspaceError,
     clean_workspace,
@@ -186,28 +186,34 @@ def _run_migration_impl(
     )
     try:
         state = state_mgr.read()
-        last_cl = state.last_migrated_cl
-        logger.info(f"Last migrated changelist: {last_cl}")
+        path_baselines = {gp: ps.last_migrated_cl for gp, ps in state.paths.items()}
+        logger.info(f"Per-path baselines: {path_baselines}")
     except StateError as exc:
         logger.info(f"State file not found: {exc}")
         logger.info("Falling back to scanning Git history for last P4 changelist ...")
         git_paths = [m.git_path for m in config.path_mappings]
         try:
             repo_full = _parse_repo_full_name(config.github_url)
-            scanned_cl = git.scan_last_p4_cl(
+            path_cls = git.scan_last_p4_cl(
                 git_paths,
                 github_token=github_token,
                 repo_full_name=repo_full,
             )
-            if scanned_cl is not None:
-                last_cl = scanned_cl
-                logger.info(f"Found last P4 changelist from Git history: {last_cl}")
-                # Persist for future runs so the fallback is only needed once
-                state_mgr.write(
-                    scanned_cl,
+            if path_cls:
+                logger.info(f"Found per-path baselines from Git history: {path_cls}")
+                # Ensure every configured path has a baseline (fallback to 0
+                # if a path has no git-p4 marker — it will discover all CLs
+                # from scratch on the first migration run).
+                state_paths: dict[str, PathState] = {}
+                for m in config.path_mappings:
+                    cl = path_cls.get(m.git_path, 0)
+                    state_paths[m.git_path] = PathState(last_migrated_cl=cl)
+                state = State(
+                    paths=state_paths,
                     repository=config.repository_name,
                     branch=config.default_branch,
                 )
+                state_mgr.write(state)
             else:
                 raise MigrationError(
                     "No previous P4 changelist found in Git history "
@@ -229,43 +235,91 @@ def _run_migration_impl(
         errors.append(str(exc))
         raise MigrationError() from exc
 
-    # -- 7. Discover new changelists -------------------------------------
-    depot_paths = [m.p4_path for m in config.path_mappings]
-    logger.info(f"Querying Perforce for changes after CL {last_cl} ...")
-    try:
-        cl_ids = p4.get_changelists(after_cl=last_cl, depot_paths=depot_paths)
-    except P4Error as exc:
-        logger.error(str(exc))
-        errors.append(str(exc))
-        raise MigrationError() from exc
+    # -- 7. Discover new changelists (per-path baselines) ----------------
+    all_cl_ids: set[int] = set()
+    for mapping in config.path_mappings:
+        path_baseline = state.get_path_cl(mapping.git_path) or 0
+        logger.info(
+            f"Querying {mapping.git_path} ({mapping.p4_path}) "
+            f"for changes after CL {path_baseline} ..."
+        )
+        try:
+            cls = p4.get_changelists(
+                after_cl=path_baseline,
+                depot_paths=[mapping.p4_path],
+            )
+        except P4Error as exc:
+            logger.error(str(exc))
+            errors.append(str(exc))
+            raise MigrationError() from exc
 
+        if cls:
+            logger.info(f"  {mapping.git_path}: {len(cls)} new CL(s) — {cls}")
+        all_cl_ids.update(cls)
+
+    cl_ids = sorted(all_cl_ids)
     if not cl_ids:
         logger.info("No new changelists to migrate.")
         return (0, 0)
 
-    logger.info(f"Found {len(cl_ids)} new changelist(s): {cl_ids}")
+    logger.info(f"Found {len(cl_ids)} new changelist(s) in total: {cl_ids}")
 
     # -- 8. Process each changelist (oldest first) -----------------------
+    highest_per_path: dict[str, int] = {}
+
     for cl_id in cl_ids:
         changelists_processed += 1
-        logger.info(f"Processing changelist {cl_id} ({changelists_processed}/{len(cl_ids)}) ...")
+        logger.info(f"Processing changelist {changelists_processed}/{len(cl_ids)} — CL {cl_id} ...")
 
         try:
+            # 8a. Fetch CL details FIRST (before syncing) so we know
+            #     which gitPaths are affected.
+            cl: Changelist = p4.get_changelist_details(cl_id)
+
+            # 8b. Match changed files to gitPaths
+            affected_git_paths = _match_affected_paths(
+                cl.files, config.path_mappings,
+            )
+            logger.info(f"  Affected gitPaths: {affected_git_paths}")
+
+            # 8c. Determine which depot paths actually need syncing
+            #     (skip paths whose baseline already covers this CL).
+            depot_paths_to_sync: list[str] = []
+            for git_path in affected_git_paths:
+                path_baseline = state.get_path_cl(git_path) or 0
+                if cl_id > path_baseline:
+                    for m in config.path_mappings:
+                        if m.git_path == git_path:
+                            depot_paths_to_sync.append(m.p4_path)
+                            break
+
+            if not depot_paths_to_sync:
+                logger.info(f"  CL {cl_id} already covered for all affected paths; skipping")
+                continue
+
+            # 8d. Sync only the affected paths, stage, and commit
             _process_one_changelist(
                 p4=p4,
                 git=git,
                 config=config,
                 user_mapping=user_mapping,
-                cl_id=cl_id,
+                cl=cl,
+                depot_paths_to_sync=depot_paths_to_sync,
                 workspace_root=workspace_root,
                 logger=logger,
             )
             commits_created += 1
+
+            # 8e. Track per-path progress
+            for git_path in affected_git_paths:
+                current = highest_per_path.get(git_path, 0)
+                if cl_id > current:
+                    highest_per_path[git_path] = cl_id
+
         except (P4Error, GitError, WorkspaceError) as exc:
             msg = f"Failed at changelist {cl_id}: {exc}"
             logger.error(msg)
             errors.append(msg)
-            # Stop immediately — do not update state
             raise MigrationError() from exc
 
     # -- 9. Push all commits ---------------------------------------------
@@ -278,15 +332,12 @@ def _run_migration_impl(
         errors.append(str(exc))
         raise MigrationError() from exc
 
-    # -- 10. Update state ------------------------------------------------
-    final_cl = cl_ids[-1]
-    logger.info(f"Updating state to CL {final_cl} ...")
+    # -- 10. Update state (per-path) ------------------------------------
+    logger.info(f"Updating per-path state: {highest_per_path}")
     try:
-        state_mgr.write(
-            final_cl,
-            repository=config.repository_name,
-            branch=config.default_branch,
-        )
+        for git_path, last_cl in highest_per_path.items():
+            state.set_path_cl(git_path, last_cl)
+        state_mgr.write(state)
     except StateError as exc:
         logger.error(f"Failed to update state: {exc}")
         errors.append(str(exc))
@@ -310,33 +361,40 @@ def _process_one_changelist(
     git: GitClient,
     config: RepositoryConfig,
     user_mapping: dict[str, UserMapping],
-    cl_id: int,
+    cl: Changelist,
+    depot_paths_to_sync: list[str],
     workspace_root: Path,
     logger: P4MirrorLogger,
 ) -> None:
-    """Fetch, sync, stage, and commit a single Perforce changelist."""
+    """Sync only the affected depot paths, stage, and commit a single CL.
 
-    # --- a. Fetch changelist metadata ---
-    logger.info(f"  Fetching details for CL {cl_id} ...")
-    cl: Changelist = p4.get_changelist_details(cl_id)
+    Parameters
+    ----------
+    cl : Changelist
+        Pre-fetched changelist metadata (caller fetches details *before*
+        calling this function so it can determine which paths to sync).
+    depot_paths_to_sync : list[str]
+        Depot paths affected by this CL that actually need syncing
+        (already filtered against per-path baselines).
+    """
 
-    # --- b. Sync workspace to this changelist ---
-    logger.info(f"  Syncing workspace to CL {cl_id} ...")
-    p4.sync(config.p4_client, cl_id)
+    # --- a. Sync only the affected depot paths ---
+    for dp in depot_paths_to_sync:
+        logger.info(f"  Syncing {dp} to CL {cl.cl_id} ...")
+        p4.sync_path(config.p4_client, dp, cl.cl_id)
 
-    # --- c. Clean untracked files ---
+    # --- b. Clean untracked files ---
     clean_workspace(workspace_root)
 
-    # --- d. Stage all changes in Git ---
+    # --- c. Stage all changes in Git ---
     logger.info(f"  Staging changes ...")
     git.stage_all()
 
-    # --- e. Map Perforce user to Git author ---
+    # --- d. Map Perforce user to Git author ---
     if cl.author in user_mapping:
         author_name = user_mapping[cl.author].name
         author_email = user_mapping[cl.author].email
     else:
-        # Fallback: use the Perforce user name and try to fetch email
         author_name = cl.author
         try:
             author_email = p4.get_user_email(cl.author)
@@ -347,10 +405,10 @@ def _process_one_changelist(
             f"using fallback {author_name} <{author_email}>"
         )
 
-    # --- f. Build commit message ---
+    # --- e. Build commit message ---
     message = _build_commit_message(cl)
 
-    # --- g. Create Git commit ---
+    # --- f. Create Git commit ---
     logger.info(f"  Creating commit: {author_name} <{author_email}> @ {cl.timestamp}")
     git.commit(
         author_name=author_name,
@@ -358,7 +416,27 @@ def _process_one_changelist(
         timestamp=cl.timestamp,
         message=message,
     )
-    logger.info(f"  Commit created for CL {cl_id}.")
+    logger.info(f"  Commit created for CL {cl.cl_id}.")
+
+
+def _match_affected_paths(
+    files: list[ChangedFile],
+    path_mappings: list[PathMapping],
+) -> list[str]:
+    """Determine which gitPaths are affected by a changelist based on its files.
+
+    Each file's depot path is checked against the ``p4_path`` prefix of
+    every mapping.  Returns a sorted list of unique gitPath names.
+    """
+    affected: set[str] = set()
+    for f in files:
+        for mapping in path_mappings:
+            # p4_path is like "//RFB/AppA/..." — strip trailing "/..."
+            prefix = mapping.p4_path[:-4]
+            if f.path.startswith(prefix):
+                affected.add(mapping.git_path)
+                break
+    return sorted(affected)
 
 
 def _build_commit_message(cl: Changelist) -> str:

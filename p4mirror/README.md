@@ -187,8 +187,11 @@ The ``init`` command bootstraps it:
    downloaded, keeping the clone fast and small.
 5. Checkout the branch.
 6. Scan Git history for ``[git-p4: ... change = N]`` markers to find the
-   last Perforce changelist that is already represented in GitHub.
-7. Write ``state/state_<repo_name>.json`` with that changelist as the baseline.
+   last Perforce changelist already in GitHub — **per gitPath**.  Each
+   path is scanned independently so different paths can have different
+   baselines (e.g. AppA at CL 1003, AppC at CL 1001).  Paths without a
+   git-p4 marker start from CL 0.
+7. Write ``state/state_<repo_name>.json`` with per-path baselines.
 
 After ``init`` completes, the workspace is ready for incremental
 migration.  No manual editing of the state file is required.
@@ -201,25 +204,39 @@ Every execution follows this workflow:
 2. Validate the workspace directory exists.
 3. Initialise Git repository (if first run).
 4. Set up sparse checkout (if enabled).
-5. Read the last migrated changelist from the per-repository state file
-   (e.g. `state/state_ApplicationA.json`).
+5. Read per-path baselines from the state file
+   (e.g. `state/state_ApplicationA.json`).  Each gitPath tracks its own
+   `last_migrated_cl` so paths can progress independently.
 6. Fetch and pull latest Git changes (`git pull --ff-only`).
-7. Query Perforce for newer changelists affecting configured paths.
+7. Query Perforce for newer changelists — **each gitPath queries from its
+   own baseline** (e.g. AppA queries `//RFB/AppA/...@>{baseline}`, AppC
+   queries `//RFB/AppC/...@>{baseline}`).  Results are unioned and sorted
+   oldest-first.
 8. For each changelist (oldest first):
-   - Sync the Perforce workspace to that specific changelist.
+   - Fetch changelist details to determine which gitPaths are affected.
+   - **Sync only the affected depot paths** to that changelist
+     (e.g. `p4 sync //RFB/AppA/...@{cl}`).
    - Stage all changes in Git (`git add -A`).
    - Create a Git commit with the original author, date, and message.
+   - Track per-path progress (which gitPath reached which CL).
 9. Push all commits to GitHub.
-10. Update the per-repository state file with the latest migrated changelist.
+10. Update the per-repository state file — each gitPath's `last_migrated_cl`
+    is updated independently based on the changelists that affected it.
 
 ## State File
 
+Each gitPath within a repository tracks its own `last_migrated_cl`, stored
+in a single per-repository JSON file.
+
 ```json
 {
-    "last_migrated_cl": 58321,
+    "paths": {
+        "AppA": { "last_migrated_cl": 58321 },
+        "AppC": { "last_migrated_cl": 58100 }
+    },
     "repository": "ApplicationA",
     "branch": "main",
-    "last_run": "2026-06-25T10:15:30+00:00"
+    "last_run": "2026-07-10T10:15:30+00:00"
 }
 ```
 
@@ -228,17 +245,19 @@ Every execution follows this workflow:
   P4Mirror falls back to scanning the Git commit history for the last
   Perforce changelist (by looking for the ``[git-p4: ... change = N]``
   marker in commits that touched the configured sparse-checkout paths).
-  If found, the state is reconstructed automatically.  If no matching
+  If found, the state is reconstructed **per-path**.  If no matching
   commit exists, migration stops with an error.
-- On success, the state is updated so the next run resumes from the next
-  changelist.
+- On success, each gitPath's baseline is updated independently so the
+  next run resumes from the correct point for each path.
+- **Legacy format** (single `last_migrated_cl` field) is auto-converted
+  on read and used as a shared baseline across all paths.
 
 ## Error Recovery
 
 | Scenario | Behaviour |
 |----------|-----------|
-| Migration fails mid-changelist | Stop immediately. State **not** updated. Completed commits remain. Next run resumes from last saved CL. |
-| State file missing or invalid | Fall back to scanning Git history for the last P4 changelist (``[git-p4: ... change = N]``). If found, state is auto-reconstructed. If not, stop with an error. |
+| Migration fails mid-changelist | Stop immediately. State **not** updated. Completed commits remain. Next run resumes from last saved per-path CLs. |
+| State file missing or invalid | Fall back to scanning Git history for the last P4 changelist (``[git-p4: ... change = N]``) per gitPath. If found, per-path state is auto-reconstructed. If not, stop with an error. |
 | Push fails | Commits exist locally. Next run will attempt push again (after fetching). |
 
 ## Adding a New Repository

@@ -136,12 +136,31 @@ class P4Client:
     # -- Sync workspace to a specific changelist --------------------------
 
     def sync(self, client_name: str, cl_id: int) -> None:
-        """Sync the Perforce workspace to a specific changelist.
+        """Sync the entire Perforce workspace to a specific changelist.
 
         This ensures the workspace reflects exactly the state of that
-        single changelist.
+        single changelist across all mapped depot paths.
         """
         self.run_command("-c", client_name, "sync", f"//...@{cl_id}")
+
+    def sync_path(self, client_name: str, depot_path: str, cl_id: int) -> None:
+        """Sync a single *depot_path* to a specific changelist.
+
+        Only files under *depot_path* are updated; other paths in the
+        workspace remain at their current synced revision.  This is used
+        for per-gitPath migration so that each path can progress
+        independently.
+
+        Parameters
+        ----------
+        client_name : str
+            Perforce client (workspace) name.
+        depot_path : str
+            Depot path to sync (e.g. ``"//RFB/AppA/..."``).
+        cl_id : int
+            Changelist number to sync to.
+        """
+        self.run_command("-c", client_name, "sync", f"{depot_path}@{cl_id}")
 
     # -- Client workspace management ---------------------------------------
 

@@ -17,7 +17,7 @@ from config import RepositoryConfig
 from core.git_client import GitClient, GitError, GitHubAPIError, _parse_repo_full_name
 from core.logger import P4MirrorLogger
 from core.p4_client import P4Client, P4Error
-from core.state_manager import StateManager, StateError
+from core.state_manager import PathState, State, StateManager, StateError
 from core.workspace import (
     WorkspaceError,
     ensure_workspace,
@@ -164,7 +164,7 @@ def _run_init_impl(
     )
     try:
         repo_full = _parse_repo_full_name(config.github_url)
-        scanned_cl = git.scan_last_p4_cl(
+        path_cls = git.scan_last_p4_cl(
             git_paths,
             github_token=github_token,
             repo_full_name=repo_full,
@@ -174,7 +174,7 @@ def _run_init_impl(
         errors.append(str(exc))
         raise InitError() from exc
 
-    if scanned_cl is None:
+    if not path_cls:
         msg = (
             "No git-p4 markers found in the repository history. "
             "Cannot determine the baseline Perforce changelist. "
@@ -186,7 +186,16 @@ def _run_init_impl(
         errors.append(msg)
         raise InitError() from None
 
-    logger.info(f"Baseline changelist determined: {scanned_cl}")
+    # Ensure every configured path has a baseline (fallback to 0 for paths
+    # without a git-p4 marker — the first migration will discover all CLs).
+    state_paths: dict[str, PathState] = {}
+    for gp in git_paths:
+        cl = path_cls.get(gp, 0)
+        state_paths[gp] = PathState(last_migrated_cl=cl)
+        if cl:
+            logger.info(f"  {gp}: baseline CL {cl}")
+        else:
+            logger.info(f"  {gp}: no git-p4 marker found, will start from CL 0")
 
     # -- 5. Write state file --------------------------------------------
     logger.info("Writing state file ...")
@@ -195,11 +204,11 @@ def _run_init_impl(
             repository_name=config.repository_name,
             state_dir=state_dir,
         )
-        state_mgr.write(
-            scanned_cl,
+        state_mgr.write(State(
+            paths=state_paths,
             repository=config.repository_name,
             branch=config.default_branch,
-        )
+        ))
     except StateError as exc:
         logger.error(str(exc))
         errors.append(str(exc))
