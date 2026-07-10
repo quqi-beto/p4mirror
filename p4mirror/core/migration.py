@@ -224,12 +224,13 @@ def _run_migration_impl(
             errors.append(str(scan_err))
             raise MigrationError() from scan_err
 
-    # -- 6. Fetch / pull latest Git changes ------------------------------
-    logger.info("Fetching and pulling latest Git changes ...")
+    # -- 6. Force-sync local state to remote ----------------------------
+    logger.info(
+        "Force-syncing local workspace to remote origin/%s ...",
+        config.default_branch,
+    )
     try:
-        git.fetch()
-        git.pull_ff_only()
-        git.checkout_branch()
+        git.force_sync_to_remote()
     except GitError as exc:
         logger.error(str(exc))
         errors.append(str(exc))

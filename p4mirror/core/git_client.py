@@ -72,38 +72,22 @@ class GitClient:
     # Public API
     # ------------------------------------------------------------------
 
-    def fetch(self) -> None:
-        """Run ``git fetch origin``."""
+    def force_sync_to_remote(self) -> None:
+        """Force local branch, index, and working tree to match the remote.
+
+        Runs the following commands inside the repository:
+
+        #. ``git fetch origin`` — downloads latest remote refs.
+        #. ``git reset --hard origin/{branch}`` — resets the branch pointer
+           and **discards all staged and unstaged local changes**.
+        #. ``git clean -fd`` — removes untracked files and directories.
+
+        After this call the working tree is an exact copy of the remote
+        branch.  **Uncommitted local changes are permanently lost.**
+        """
         self._run("fetch", "origin")
-
-    def fetch_with_filter(self, branch: str | None = None) -> None:
-        """Fetch a single branch using partial clone filter.
-
-        Uses ``git fetch origin {branch} --filter=blob:none`` so that only
-        blob objects for the sparse-checkout paths are downloaded.
-        This is used during ``p4mirror init`` for an efficient initial clone.
-
-        Parameters
-        ----------
-        branch : str or None
-            Branch to fetch. Defaults to the configured default branch.
-        """
-        target = branch or self._branch
-        self._run("fetch", "origin", target, "--filter=blob:none")
-
-    def pull_ff_only(self) -> None:
-        """Run ``git pull --ff-only origin {branch}``."""
-        self._run("pull", "--ff-only", "origin", self._branch)
-
-    def checkout_branch(self, branch: str | None = None) -> None:
-        """Switch to *branch*, creating it if it doesn't exist locally.
-
-        Uses ``git checkout -B {branch}`` to reset to the remote
-        tracking branch if it already exists.
-        """
-        target = branch or self._branch
-        self._run("checkout", "-B", target, f"origin/{target}")
-        self._run("checkout", "-B", target)
+        self._run("reset", "--hard", f"origin/{self._branch}")
+        self._run("clean", "-fd")
 
     def stage_all(self) -> None:
         """Stage all changes (adds, modifications, deletes) via ``git add -A``."""
