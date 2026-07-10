@@ -124,7 +124,8 @@ def _run_init_impl(
         p4_port=config.p4_port,
         p4_user=config.p4_user,
         p4_client=config.p4_client,
-        p4_repository=config.repository_name
+        p4_repository=config.repository_name,
+        workspace_root=config.workspace_root,
     )
     view_mappings = config.view_mappings
     try:

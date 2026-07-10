@@ -149,7 +149,8 @@ def _run_migration_impl(
         p4_port=config.p4_port,
         p4_user=config.p4_user,
         p4_client=config.p4_client,
-        p4_repository=config.repository_name
+        p4_repository=config.repository_name,
+        workspace_root=workspace_root,
     )
     git = GitClient(
         workspace_root=workspace_root,
@@ -226,8 +227,7 @@ def _run_migration_impl(
 
     # -- 6. Force-sync local state to remote ----------------------------
     logger.info(
-        "Force-syncing local workspace to remote origin/%s ...",
-        config.default_branch,
+        f"Force-syncing local workspace to remote origin/{config.default_branch} ...",
     )
     try:
         git.force_sync_to_remote()

@@ -207,7 +207,7 @@ Every execution follows this workflow:
 5. Read per-path baselines from the state file
    (e.g. `state/state_ApplicationA.json`).  Each gitPath tracks its own
    `last_migrated_cl` so paths can progress independently.
-6. Fetch and pull latest Git changes (`git pull --ff-only`).
+6. Force-sync local workspace to remote origin (`git fetch origin && git reset --hard origin/{branch} && git clean -fd`).
 7. Query Perforce for newer changelists — **each gitPath queries from its
    own baseline** (e.g. AppA queries `//RFB/AppA/...@>{baseline}`, AppC
    queries `//RFB/AppC/...@>{baseline}`).  Results are unioned and sorted

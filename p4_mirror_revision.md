@@ -52,7 +52,7 @@ This revision incorporates the design decisions discussed during the review, inc
 
 · Skipped changelists that modify only unmapped paths are ignored safely.
 
-· Run 'git fetch' and 'git pull --ff-only' before creating new commits.
+· Force-sync local workspace to remote origin before creating new commits.
 
 ## **State File**
 

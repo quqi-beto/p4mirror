@@ -41,6 +41,9 @@ class P4Client:
         Perforce username.
     p4_client : str
         Perforce workspace (client) name.
+    workspace_root : str or Path
+        Local filesystem root where the Perforce workspace is synced.
+        Used as the working directory for all ``p4`` commands.
     p4_executable : str or Path
         Path to ``p4.exe``.  Defaults to ``"p4"`` (expect it on ``PATH``).
     """
@@ -51,6 +54,7 @@ class P4Client:
         p4_user: str,
         p4_client: str,
         p4_repository: str,
+        workspace_root: str | Path,
         p4_executable: str | Path = "p4",
     ) -> None:
         self._p4 = p4_executable
@@ -58,6 +62,7 @@ class P4Client:
         self._user = p4_user
         self._client = p4_client
         self._repository = p4_repository
+        self._root = Path(workspace_root)
 
     # ------------------------------------------------------------------
     # Public API
@@ -86,6 +91,7 @@ class P4Client:
         ]
         result = subprocess.run(
             cmd,
+            cwd=str(self._root),
             capture_output=True,
             text=True,
             timeout=120,
