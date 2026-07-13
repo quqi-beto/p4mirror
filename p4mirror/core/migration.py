@@ -256,6 +256,8 @@ def _run_migration_impl(
 
         if cls:
             logger.info(f"  {mapping.git_path}: {len(cls)} new CL(s) — {cls}")
+        else:
+            logger.info(f"  {mapping.git_path}: no new changelists found.")
         all_cl_ids.update(cls)
 
     cl_ids = sorted(all_cl_ids)
@@ -268,6 +270,8 @@ def _run_migration_impl(
     # -- 8. Process each changelist (oldest first) -----------------------
     highest_per_path: dict[str, int] = {}
 
+    commits_created = 0
+    changelists_processed = 0
     for cl_id in cl_ids:
         changelists_processed += 1
         logger.info(f"Processing changelist {changelists_processed}/{len(cl_ids)} — CL {cl_id} ...")
@@ -384,14 +388,7 @@ def _process_one_changelist(
         logger.info(f"  Syncing {dp} to CL {cl.cl_id} ...")
         p4.sync_path(config.p4_client, dp, cl.cl_id)
 
-    # --- b. Clean untracked files ---
-    clean_workspace(workspace_root)
-
-    # --- c. Stage all changes in Git ---
-    logger.info(f"  Staging changes ...")
-    git.stage_all()
-
-    # --- d. Map Perforce user to Git author ---
+    # --- c. Map Perforce user to Git author ---
     if cl.author in user_mapping:
         author_name = user_mapping[cl.author].name
         author_email = user_mapping[cl.author].email
@@ -406,8 +403,13 @@ def _process_one_changelist(
             f"using fallback {author_name} <{author_email}>"
         )
 
-    # --- e. Build commit message ---
-    message = _build_commit_message(cl)
+    # --- f. Build commit message ---
+    message = _build_commit_message(cl, config.repository_name)
+    print(f"  Commit message:\n{message}")
+
+    # --- e. Stage all changes in Git ---
+    logger.info(f"  Staging changes ...")
+    git.stage_all()
 
     # --- f. Create Git commit ---
     logger.info(f"  Creating commit: {author_name} <{author_email}> @ {cl.timestamp}")
@@ -440,12 +442,12 @@ def _match_affected_paths(
     return sorted(affected)
 
 
-def _build_commit_message(cl: Changelist) -> str:
+def _build_commit_message(cl: Changelist, repository) -> str:
     """Build the Git commit message from a changelist.
 
     Appends the Perforce changelist reference in brackets.
     """
     desc = cl.description.strip()
     if desc:
-        return f"{desc}\n\n[P4 CL {cl.cl_id}]"
-    return f"[P4 CL {cl.cl_id}]"
+        return f"{desc}\n\n[P4MIRROR: depot-paths = //{repository}/: change = {cl.cl_id}]"
+    return f"[P4MIRROR:  CL {cl.cl_id}]"

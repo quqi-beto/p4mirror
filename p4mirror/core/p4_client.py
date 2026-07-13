@@ -149,7 +149,7 @@ class P4Client:
         """
         self.run_command("-c", client_name, "sync", f"//...@{cl_id}")
 
-    def sync_path(self, client_name: str, depot_path: str, cl_id: int) -> None:
+    def sync_path(self, depot_path: str, cl_id: int) -> None:
         """Sync a single *depot_path* to a specific changelist.
 
         Only files under *depot_path* are updated; other paths in the
@@ -166,13 +166,13 @@ class P4Client:
         cl_id : int
             Changelist number to sync to.
         """
-        self.run_command("-c", client_name, "sync", f"{depot_path}@{cl_id}")
+        result = self.run_command("sync", f"{depot_path}@{cl_id}")
+        print(f"Sync result for {depot_path}@{cl_id}:\n{result}")
 
     # -- Client workspace management ---------------------------------------
 
     def ensure_client_workspace(
         self,
-        workspace_root: str,
         view_mappings: list[str],
         description: str = "Created by P4Mirror",
     ) -> None:
@@ -207,9 +207,9 @@ class P4Client:
             "Description:",
             f"\t{description}",
             "",
-            f"Root:\t{workspace_root}",
+            f"Root:\t{self.get_workspace_root()}",
             "",
-            "Options:\tnoallwrite noclobber nocompress unlocked nomodtime normdir",
+            "Options:\tnoallwrite clobber nocompress unlocked nomodtime normdir",
             "",
             "LineEnd:\tlocal",
             "",
@@ -245,6 +245,16 @@ class P4Client:
             )
 
     # -- User info ---------------------------------------------------------
+
+    # -- Remove repository name from the workspace_root to get the workspace root
+    def get_workspace_root(self) -> Path:
+        """Return the root of the Perforce workspace.
+
+        This is derived from the configured workspace_root by removing
+        the repository name, which is appended to the workspace_root
+        during initialization.
+        """
+        return Path(self._root).parent
 
     def get_user_email(self, p4_user: str) -> str:
         """Fetch the email address of a Perforce user via ``p4 user -o``."""
