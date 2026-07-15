@@ -386,7 +386,7 @@ def _process_one_changelist(
     # --- a. Sync only the affected depot paths ---
     for dp in depot_paths_to_sync:
         logger.info(f"  Syncing {dp} to CL {cl.cl_id} ...")
-        p4.sync_path(config.p4_client, dp, cl.cl_id)
+        p4.sync_path(dp, cl.cl_id)
 
     # --- c. Map Perforce user to Git author ---
     if cl.author in user_mapping:
