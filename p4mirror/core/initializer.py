@@ -130,7 +130,6 @@ def _run_init_impl(
     view_mappings = config.view_mappings
     try:
         p4.ensure_client_workspace(
-            workspace_root=config.workspace_root,
             view_mappings=view_mappings,
         )
     except P4Error as exc:

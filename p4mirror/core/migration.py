@@ -449,5 +449,5 @@ def _build_commit_message(cl: Changelist, repository) -> str:
     """
     desc = cl.description.strip()
     if desc:
-        return f"{desc}\n\n[P4MIRROR: depot-paths = //{repository}/: change = {cl.cl_id}]"
-    return f"[P4MIRROR:  CL {cl.cl_id}]"
+        return f"{desc}\n\nP4MIRROR:\n[git-p4: depot-paths = \"//{repository}/\": change = {cl.cl_id}]"
+    return f"P4MIRROR:\n[git-p4: change = {cl.cl_id}]"
