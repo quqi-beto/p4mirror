@@ -214,4 +214,22 @@ def _run_init_impl(
         errors.append(str(exc))
         raise InitError() from exc
 
+    # -- 6. Sync each P4 path to its baseline CL ------------------------
+    logger.info("Syncing P4 workspace to baseline changelists ...")
+    path_baselines: dict[str, int] = {}
+    for mapping in config.path_mappings:
+        baseline_cl = state_paths.get(mapping.git_path, PathState(last_migrated_cl=0)).last_migrated_cl
+        if baseline_cl > 0:
+            path_baselines[mapping.p4_path] = baseline_cl
+    if path_baselines:
+        try:
+            p4.sync_paths_to_baseline(path_baselines)
+            logger.info(f"P4 workspace synced to baselines: {path_baselines}")
+        except P4Error as exc:
+            logger.error(f"P4 baseline sync failed: {exc}")
+            errors.append(str(exc))
+            raise InitError() from exc
+    else:
+        logger.info("  No baselines to sync (all CLs are 0).")
+
     logger.info("Initialisation complete.")

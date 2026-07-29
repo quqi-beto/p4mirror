@@ -68,7 +68,7 @@ class P4Client:
     # Public API
     # ------------------------------------------------------------------
 
-    def run_command(self, *args: str) -> str:
+    def run_command(self, *args: str, timeout: int = 120) -> str:
         """Execute a raw ``p4`` command and return its stdout.
 
         Parameters
@@ -76,6 +76,9 @@ class P4Client:
         *args
             Command arguments passed directly to ``p4``
             (e.g. ``"changes", "-s", "submitted", "//depot/..."``).
+        timeout : int
+            Timeout in seconds (default 120).  Use a higher value for
+            large sync operations (e.g. 600).
 
         Raises
         ------
@@ -94,7 +97,7 @@ class P4Client:
             cwd=str(self._root),
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout,
         )
         if result.returncode != 0:
             raise P4Error(
@@ -159,8 +162,6 @@ class P4Client:
 
         Parameters
         ----------
-        client_name : str
-            Perforce client (workspace) name.
         depot_path : str
             Depot path to sync (e.g. ``"//RFB/AppA/..."``).
         cl_id : int
@@ -168,6 +169,40 @@ class P4Client:
         """
         result = self.run_command("sync", f"{depot_path}@{cl_id}")
         print(f"Sync result for {depot_path}@{cl_id}:\n{result}")
+
+    def sync_paths_to_baseline(
+        self,
+        path_baselines: dict[str, int],
+        *,
+        sync_timeout: int = 600,
+    ) -> None:
+        """Sync each configured depot path to its baseline changelist.
+
+        This ensures the Perforce workspace reflects a known, coherent
+        state matching what is already in Git.  Call this during
+        initialisation and before processing new changelists to recover
+        from any partial/failed sync in a previous run.
+
+        Parameters
+        ----------
+        path_baselines : dict[str, int]
+            Mapping of depot path (e.g. ``"//RFB/AppA/..."``) to the
+            baseline changelist number to sync to.
+        sync_timeout : int
+            Timeout in seconds for each sync operation (default 600).
+            Large depots may need a higher value on the first sync.
+        """
+        for depot_path, cl_id in path_baselines.items():
+            if cl_id <= 0:
+                # CL 0 means "no baseline" — skip (there is nothing to
+                # sync to before the first discovered changelist).
+                continue
+            print(f"  Syncing {depot_path} to baseline CL {cl_id} ...")
+            result = self.run_command(
+                "sync", f"{depot_path}@{cl_id}",
+                timeout=sync_timeout,
+            )
+            print(f"  Sync result for {depot_path}@{cl_id}:\n{result}")
 
     # -- Client workspace management ---------------------------------------
 

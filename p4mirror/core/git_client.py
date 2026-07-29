@@ -268,7 +268,7 @@ class GitClient:
             cwd=str(self._root),
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=600,
             env=env,
         )
         if result.returncode != 0:
