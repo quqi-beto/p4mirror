@@ -9,10 +9,18 @@ from __future__ import annotations
 import json
 import os
 import re
+import ssl
 import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
+
+try:
+    import certifi as _certifi
+
+    _SSL_CONTEXT = ssl.create_default_context(cafile=_certifi.where())  # type: ignore[attr-defined,unused-ignore]
+except ImportError:
+    _SSL_CONTEXT = ssl.create_default_context()
 from datetime import datetime
 from pathlib import Path
 from typing import Mapping
@@ -206,7 +214,7 @@ class GitClient:
 
             req = urllib.request.Request(url, headers=headers)
             try:
-                with urllib.request.urlopen(req, timeout=30) as resp:
+                with urllib.request.urlopen(req, timeout=30, context=_SSL_CONTEXT) as resp:
                     data: list[dict] = json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")
