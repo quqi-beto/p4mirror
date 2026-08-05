@@ -204,6 +204,48 @@ class P4Client:
             )
             print(f"  Sync result for {depot_path}@{cl_id}:\n{result}")
 
+    # -- File content fetch (no-checkout commits) --------------------------
+
+    def print_file(self, depot_path: str, rev: int, out_path: str | Path) -> None:
+        """Fetch the content of *depot_path* at revision *rev* to *out_path*.
+
+        Uses ``p4 print -q -o`` so binary files are written safely to disk
+        (avoiding stdout text-mode corruption on Windows).  This is used to
+        stage dynamic-depot files into Git without syncing them into the
+        local workspace.
+
+        Parameters
+        ----------
+        depot_path : str
+            Depot path of the file (e.g. ``//REPOSITORY/org/apache/.../log4j-core.jar``).
+        rev : int
+            Revision of the file within the changelist being migrated.
+        out_path : str or Path
+            Local path to write the file content to (usually a temp file).
+        """
+        self.run_command(
+            "print", "-q", "-o", str(out_path), f"{depot_path}#{rev}",
+            timeout=600,
+        )
+
+    def fstat_mode(self, depot_path: str, rev: int) -> int:
+        """Return the Git file mode for *depot_path* at revision *rev*.
+
+        Returns ``100755`` for files with the ``+x`` type modifier
+        (executable), otherwise ``100644``.  Used to preserve the exec bit
+        when staging no-checkout commits (where ``git add`` cannot infer it
+        from a real file on disk).
+        """
+        stdout = self.run_command(
+            "fstat", "-T", "headType", f"{depot_path}#{rev}",
+        )
+        for line in stdout.splitlines():
+            if "headType" in line:
+                # e.g. "... headType text+x"
+                head_type = line.split("headType", 1)[1].strip()
+                return 0o100755 if "+x" in head_type else 0o100644
+        return 0o100644
+
     # -- Client workspace management ---------------------------------------
 
     def ensure_client_workspace(
@@ -363,7 +405,7 @@ class P4Client:
         for line in lines:
             stripped = line.strip()
             file_match = re.match(
-                r"^\.\.\.\s+(?P<path>//\S+)#\d+\s+(?P<action>\S+)",
+                r"^\.\.\.\s+(?P<path>//\S+)#(?P<rev>\d+)\s+(?P<action>\S+)",
                 stripped,
             )
             if file_match:
@@ -372,6 +414,7 @@ class P4Client:
                         path=file_match.group("path"),
                         action=file_match.group("action"),
                         depot_file=file_match.group("path"),
+                        rev=int(file_match.group("rev")),
                     )
                 )
 

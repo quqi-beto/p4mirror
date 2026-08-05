@@ -23,6 +23,9 @@ class ChangedFile:
     depot_file: str = ""
     """Full depot file syntax (may include revision)."""
 
+    rev: int = 0
+    """Revision of the file as of this changelist (e.g. ``3`` from ``#3``)."""
+
 
 @dataclass
 class Changelist:

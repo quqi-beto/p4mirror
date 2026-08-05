@@ -106,6 +106,9 @@ def _run_init_impl(
     """Internal init logic — extracted for clean error handling."""
 
     git_paths = [m.git_path for m in config.path_mappings]
+    # Dynamic mappings are never materialized (no-checkout commits), so they
+    # are excluded from sparse checkout to avoid wasting local storage.
+    sparse_paths = [m.git_path for m in config.path_mappings if not m.dynamic]
 
     # -- 1. Ensure workspace directory exists ----------------------------
     logger.info("Ensuring workspace directory ...")
@@ -148,9 +151,9 @@ def _run_init_impl(
 
     # -- 3. Configure sparse checkout ------------------------------------
     if config.sparse_checkout:
-        logger.info(f"Setting up sparse checkout for: {git_paths}")
+        logger.info(f"Setting up sparse checkout for: {sparse_paths}")
         try:
-            setup_sparse_checkout(workspace_root, git_paths)
+            setup_sparse_checkout(workspace_root, sparse_paths)
         except WorkspaceError as exc:
             logger.error(str(exc))
             errors.append(str(exc))
@@ -186,11 +189,19 @@ def _run_init_impl(
         errors.append(msg)
         raise InitError() from None
 
-    # Ensure every configured path has a baseline (fallback to 0 for paths
-    # without a git-p4 marker — the first migration will discover all CLs).
+    # Ensure every configured path has a baseline.  Paths without a git-p4
+    # marker default to 0 (the first migration discovers all CLs), except
+    # for dynamic mappings which may seed a configured ``baseline_cl`` so a
+    # depot can be adopted without backfilling its entire history.
     state_paths: dict[str, PathState] = {}
-    for gp in git_paths:
+    for m in config.path_mappings:
+        gp = m.git_path
         cl = path_cls.get(gp, 0)
+        if cl == 0 and m.dynamic and m.baseline_cl > 0:
+            cl = m.baseline_cl
+            logger.info(
+                f"  {gp}: no git-p4 marker; using configured baseline_cl {cl}"
+            )
         state_paths[gp] = PathState(last_migrated_cl=cl)
         if cl:
             logger.info(f"  {gp}: baseline CL {cl}")
@@ -215,9 +226,13 @@ def _run_init_impl(
         raise InitError() from exc
 
     # -- 6. Sync each P4 path to its baseline CL ------------------------
+    # Dynamic mappings are skipped — their files are never synced to the
+    # local workspace (no-checkout commits fetch content via p4 print).
     logger.info("Syncing P4 workspace to baseline changelists ...")
     path_baselines: dict[str, int] = {}
     for mapping in config.path_mappings:
+        if mapping.dynamic:
+            continue
         baseline_cl = state_paths.get(mapping.git_path, PathState(last_migrated_cl=0)).last_migrated_cl
         if baseline_cl > 0:
             path_baselines[mapping.p4_path] = baseline_cl

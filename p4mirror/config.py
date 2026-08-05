@@ -19,10 +19,32 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class PathMapping:
-    """A single Perforce-to-Git path mapping."""
+    """A single Perforce-to-Git path mapping.
+
+    Parameters
+    ----------
+    p4_path : str
+        Perforce depot path (must end with ``/...``).
+    git_path : str
+        Relative Git path that *p4_path* maps to.
+    dynamic : bool
+        If ``True``, this is a *dynamic* depot mapping: the depot root is
+        watched as a whole (all sub-paths are migrated with no filter), the
+        path is excluded from sparse checkout, and files are committed
+        without being written to the local workspace (no-checkout staging).
+        Use this for depots whose sub-paths are unpredictable (e.g. build
+        artifacts added by a build server).
+    baseline_cl : int
+        Optional initial changelist baseline used to seed state on the first
+        run when no git-p4 marker is found.  Lets you adopt a depot without
+        backfilling its entire history (set to the current P4 change number
+        at adoption time).  ``0`` means "no seed — start from the beginning".
+    """
 
     p4_path: str
     git_path: str
+    dynamic: bool = False
+    baseline_cl: int = 0
 
 
 @dataclass(frozen=True)
@@ -125,7 +147,26 @@ def load_repository_config(path: str | Path) -> RepositoryConfig:
             raise ConfigError(
                 f"git_path is empty in path_mappings[{i}] of {path}"
             )
-        mappings.append(PathMapping(p4_path=p4_path, git_path=git_path))
+
+        dynamic = entry.get("dynamic", False)
+        if not isinstance(dynamic, bool):
+            raise ConfigError(
+                f"'dynamic' must be a boolean in path_mappings[{i}] of {path}"
+            )
+
+        baseline_cl = entry.get("baseline_cl", 0)
+        if not isinstance(baseline_cl, int) or baseline_cl < 0:
+            raise ConfigError(
+                f"'baseline_cl' must be a non-negative integer in "
+                f"path_mappings[{i}] of {path}"
+            )
+
+        mappings.append(PathMapping(
+            p4_path=p4_path,
+            git_path=git_path,
+            dynamic=dynamic,
+            baseline_cl=baseline_cl,
+        ))
 
     kwargs["path_mappings"] = mappings
 

@@ -134,8 +134,11 @@ def _run_migration_impl(
         raise MigrationError() from exc
 
     # -- 3. Sparse checkout (optional) -----------------------------------
+    # Dynamic mappings are excluded: their files are never materialized in
+    # the working tree (no-checkout commits), so adding them to the sparse
+    # cone would only waste local storage.
     if config.sparse_checkout:
-        git_paths = [m.git_path for m in config.path_mappings]
+        git_paths = [m.git_path for m in config.path_mappings if not m.dynamic]
         logger.info(f"Setting up sparse checkout for: {git_paths}")
         try:
             setup_sparse_checkout(workspace_root, git_paths)
@@ -208,6 +211,8 @@ def _run_migration_impl(
                 state_paths: dict[str, PathState] = {}
                 for m in config.path_mappings:
                     cl = path_cls.get(m.git_path, 0)
+                    if cl == 0 and m.dynamic and m.baseline_cl > 0:
+                        cl = m.baseline_cl
                     state_paths[m.git_path] = PathState(last_migrated_cl=cl)
                 state = State(
                     paths=state_paths,
@@ -290,19 +295,29 @@ def _run_migration_impl(
             # 8c. Determine which depot paths actually need syncing
             #     (skip paths whose baseline already covers this CL).
             depot_paths_to_sync: list[str] = []
+            dynamic_mappings: list[PathMapping] = []
             for git_path in affected_git_paths:
                 path_baseline = state.get_path_cl(git_path) or 0
-                if cl_id > path_baseline:
-                    for m in config.path_mappings:
-                        if m.git_path == git_path:
+                if cl_id <= path_baseline:
+                    logger.info(
+                        f"  {git_path} already covered at CL {path_baseline}; skipping"
+                    )
+                    continue
+                for m in config.path_mappings:
+                    if m.git_path == git_path:
+                        if m.dynamic:
+                            dynamic_mappings.append(m)
+                        else:
                             depot_paths_to_sync.append(m.p4_path)
-                            break
+                        break
 
-            if not depot_paths_to_sync:
+            if not depot_paths_to_sync and not dynamic_mappings:
                 logger.info(f"  CL {cl_id} already covered for all affected paths; skipping")
                 continue
 
-            # 8d. Sync only the affected paths, stage, and commit
+            # 8d. Sync non-dynamic paths (working tree) + no-checkout stage
+            #     dynamic paths (never touch the working tree), then create
+            #     a single Git commit for this changelist.
             _process_one_changelist(
                 p4=p4,
                 git=git,
@@ -310,6 +325,7 @@ def _run_migration_impl(
                 user_mapping=user_mapping,
                 cl=cl,
                 depot_paths_to_sync=depot_paths_to_sync,
+                dynamic_mappings=dynamic_mappings,
                 workspace_root=workspace_root,
                 logger=logger,
             )
@@ -368,6 +384,7 @@ def _process_one_changelist(
     user_mapping: dict[str, UserMapping],
     cl: Changelist,
     depot_paths_to_sync: list[str],
+    dynamic_mappings: list[PathMapping],
     workspace_root: Path,
     logger: P4MirrorLogger,
 ) -> None:
@@ -380,10 +397,13 @@ def _process_one_changelist(
         calling this function so it can determine which paths to sync).
     depot_paths_to_sync : list[str]
         Depot paths affected by this CL that actually need syncing
-        (already filtered against per-path baselines).
+        (already filtered against per-path baselines).  Non-dynamic only.
+    dynamic_mappings : list of PathMapping
+        Affected dynamic mappings for this CL; their files are staged
+        no-checkout (never written to the working tree).
     """
 
-    # --- a. Sync only the affected depot paths ---
+    # --- a. Sync only the affected (non-dynamic) depot paths ---
     for dp in depot_paths_to_sync:
         logger.info(f"  Syncing {dp} to CL {cl.cl_id} ...")
         p4.sync_path(dp, cl.cl_id)
@@ -407,9 +427,22 @@ def _process_one_changelist(
     message = _build_commit_message(cl, config.repository_name)
     print(f"  Commit message:\n{message}")
 
-    # --- e. Stage all changes in Git ---
+    # --- e. Stage all changes in Git (non-dynamic working tree) ---
     logger.info(f"  Staging changes ...")
     git.stage_all()
+
+    # --- b. No-checkout stage dynamic depot files ---
+    # Runs after stage_all so `git add -A` never sees the dynamic entries
+    # (they have no working-tree file and are marked skip-worktree).
+    for mapping in dynamic_mappings:
+        _stage_dynamic_changelist(
+            p4=p4,
+            git=git,
+            cl=cl,
+            mapping=mapping,
+            workspace_root=workspace_root,
+            logger=logger,
+        )
 
     # --- f. Create Git commit ---
     logger.info(f"  Creating commit: {author_name} <{author_email}> @ {cl.timestamp}")
@@ -420,6 +453,84 @@ def _process_one_changelist(
         message=message,
     )
     logger.info(f"  Commit created for CL {cl.cl_id}.")
+
+
+def _stage_dynamic_changelist(
+    p4: P4Client,
+    git: GitClient,
+    cl: Changelist,
+    mapping: PathMapping,
+    workspace_root: Path,
+    logger: P4MirrorLogger,
+) -> None:
+    """Stage a changelist's files under a *dynamic* mapping without writing
+    them to the local workspace (no-checkout commit).
+
+    For every file in *cl.files* that falls under ``mapping.p4_path``:
+
+    - the relative Git path is derived by stripping the mapping's depot
+      prefix and prepending ``mapping.git_path``, so the Git tree mirrors
+      the P4 layout (e.g. ``//REPOSITORY/org/apache/.../x.jar`` →
+      ``REPOSITORY/org/apache/.../x.jar``);
+    - ``add``/``edit``/``integrate``/``move/add`` files are fetched via
+      ``p4 print`` into a temp file, hashed into the Git object database,
+      and staged with ``git update-index --cacheinfo`` (exec bit preserved);
+    - ``delete`` files are removed from the index;
+    - every staged entry is marked ``skip-worktree`` so Git never
+      materializes it on ``checkout``/``reset``.
+    """
+    prefix = mapping.p4_path[:-4]  # strip trailing "/..."
+    git_base = mapping.git_path.rstrip("/")
+    delete_actions = {"delete", "move/delete", "purge"}
+
+    files = [f for f in cl.files if f.path.startswith(prefix)]
+    if not files:
+        logger.info(
+            f"    [dynamic] {mapping.git_path}: no files under {mapping.p4_path}"
+        )
+        return
+
+    logger.info(
+        f"    [dynamic] {mapping.git_path}: staging {len(files)} file(s) no-checkout"
+    )
+    temp_dir = workspace_root / "temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    staged = 0
+    removed = 0
+    for i, f in enumerate(files):
+        rel = f.path[len(prefix):]  # e.g. "org/apache/.../x.jar"
+        git_path = f"{git_base}/{rel}" if rel else git_base
+
+        if f.action in delete_actions:
+            logger.info(f"    [dynamic] delete  {git_path}")
+            try:
+                git.update_index_remove(git_path)
+            except GitError:
+                logger.info(
+                    f"    [dynamic] {git_path} not in index; skipping remove"
+                )
+            removed += 1
+            continue
+
+        logger.info(f"    [dynamic] {f.action:8s} {git_path}")
+        temp_path = temp_dir / f"p4mirror_blob_{cl.cl_id}_{i}.tmp"
+        try:
+            p4.print_file(f.path, f.rev, temp_path)
+            blob = git.hash_object_from_file(temp_path)
+            mode = p4.fstat_mode(f.path, f.rev)
+            git.update_index_add(git_path, blob, mode)
+            git.mark_skip_worktree(git_path)
+        finally:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        staged += 1
+
+    logger.info(
+        f"    [dynamic] {mapping.git_path}: staged {staged}, removed {removed}"
+    )
 
 
 def _match_affected_paths(

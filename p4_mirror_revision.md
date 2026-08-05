@@ -25,7 +25,24 @@ This revision incorporates the design decisions discussed during the review, inc
 · Example mapping: //RFB/AppA/... -> AppA, //RFB/AppC/... -> AppC.
 
 · Sparse checkout configuration should match the mapped Git folders.
+## Dynamic Depot Mappings
 
+·  A path mapping with `"dynamic": true` watches a depot root as a whole
+   (e.g. //REPOSITORY/...) and migrates every incremental change with no filter.
+
+·  Sub-paths need not be known ahead of time (e.g. build artifacts committed
+   under unique paths by an automated build server).
+
+·  Files are committed WITHOUT being written to the local workspace
+   (no-checkout staging: p4 print → git hash-object → git update-index) and are
+   marked skip-worktree so git checkout/reset never materializes them.
+
+·  Dynamic paths are excluded from sparse checkout; `sparse_checkout` must stay
+   enabled for the no-materialization guarantee to hold.
+
+·  Optional `baseline_cl` seeds the starting changelist so a depot can be
+   adopted without backfilling its entire history (set to the current P4 change
+   number at adoption time).
 ## **Migration Workflow**
 
 · Load configuration and user mappings.

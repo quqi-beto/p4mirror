@@ -101,6 +101,49 @@ class GitClient:
         """Stage all changes (adds, modifications, deletes) via ``git add -A``."""
         self._run("add", "-A")
 
+    # -- No-checkout staging (dynamic depots) ------------------------------
+
+    def hash_object_from_file(self, path: str | Path) -> str:
+        """Hash a file into the Git object database and return its blob hash.
+
+        The blob is written locally but NOT added to the index — use
+        :meth:`update_index_add` to stage it under a path.
+        """
+        return self._run("hash-object", "-w", str(path)).strip()
+
+    def update_index_add(self, git_path: str, blob: str, mode: int = 0o100644) -> None:
+        """Stage *blob* under *git_path* in the index without a working file.
+
+        Uses ``git update-index --add --cacheinfo`` so the file never needs
+        to exist in the working tree (used for no-checkout commits).
+
+        Parameters
+        ----------
+        git_path : str
+            Relative Git path to stage the blob under (e.g. ``REPOSITORY/org/.../x.jar``).
+        blob : str
+            Blob hash returned by :meth:`hash_object_from_file`.
+        mode : int
+            Git file mode as an octal integer (``0o100644`` or ``0o100755``).
+        """
+        self._run(
+            "update-index", "--add", "--cacheinfo",
+            f"{mode:o},{blob},{git_path}",
+        )
+
+    def update_index_remove(self, git_path: str) -> None:
+        """Remove *git_path* from the index (used for P4 deletions)."""
+        self._run("update-index", "--force-remove", git_path)
+
+    def mark_skip_worktree(self, git_path: str) -> None:
+        """Mark *git_path* as skip-worktree so Git never writes it to disk.
+
+        Protects no-checkout files from being materialized by ``git checkout``,
+        ``git reset --hard``, or ``git checkout-index`` — independent of the
+        sparse-checkout machinery.
+        """
+        self._run("update-index", "--skip-worktree", git_path)
+
     def commit(
         self,
         author_name: str,

@@ -76,6 +76,12 @@ If something about cert went wrong try this: set UV_INSECURE_HOST=github.com
         {
             "p4_path": "//RFB/AppC/...",
             "git_path": "AppC"
+        },
+        {
+            "p4_path": "//REPOSITORY/...",
+            "git_path": "REPOSITORY",
+            "dynamic": true,
+            "baseline_cl": 0
         }
     ]
 }
@@ -92,6 +98,41 @@ If something about cert went wrong try this: set UV_INSECURE_HOST=github.com
 | `default_branch` | Yes | Branch to push to (e.g. `main`) |
 | `sparse_checkout` | No | Enable Git sparse checkout (default: `false`) |
 | `path_mappings` | Yes | Array of `{p4_path, git_path}` mappings |
+
+Each `path_mappings` entry supports two optional per-mapping fields:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `dynamic` | `false` | Treat the depot path as a *dynamic depot* — watch the whole root, migrate every change with no filter, exclude it from sparse checkout, and commit files **without writing them to the local workspace** (no-checkout staging). Use for depots whose sub-paths are unpredictable (e.g. build artifacts committed under unique paths). |
+| `baseline_cl` | `0` | Optional initial changelist baseline used to seed state when no `git-p4` marker is found. Lets you adopt a dynamic depot without backfilling its entire history (set to the current P4 change number at adoption time). `0` means start from the beginning. Only meaningful for `dynamic` mappings. |
+
+### Dynamic depot mappings
+
+A `dynamic` mapping watches a depot **root as a whole** (e.g. `//REPOSITORY/...`) and
+migrates *every* incremental change under it with no filtering — no need to
+enumerate the sub-paths. This is designed for depots where paths are created
+unpredictably (an automated build server committing each artifact under a unique
+path, manually added 3rd-party jars, etc.).
+
+How it behaves:
+
+- **Discovery** queries the whole root (`p4 changes //REPOSITORY/...@>{baseline}`),
+  so new builds under any path are picked up automatically.
+- **Git layout mirrors P4**: a depot file `//REPOSITORY/org/apache/logging/log4j/
+  log4j-core/2.1.1/log4j-core-2.1.1.jar` lands at `REPOSITORY/org/apache/logging/
+  log4j/log4j-core/2.1.1/log4j-core-2.1.1.jar`, so each build/artifact/version is
+  naturally separated in the Git tree.
+- **No local storage cost**: files are fetched via `p4 print`, hashed into Git's
+  object database, and staged with `git update-index` — they are **never written
+  to the local workspace** and are marked `skip-worktree` so `git checkout`/
+  `git reset` can't materialize them either.
+- **One commit per changelist**: a CL touching both a regular path and a dynamic
+  path still produces exactly one Git commit.
+- **Single baseline per mapping**: the whole dynamic root tracks one
+  `last_migrated_cl` in the state file.
+
+> **Note:** `sparse_checkout` must stay enabled (`true`) for the no-materialization
+> guarantee to hold. Dynamic paths are automatically excluded from the sparse cone.
 
 ### `config/users.json`
 
