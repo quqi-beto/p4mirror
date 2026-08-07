@@ -122,6 +122,9 @@ How it behaves:
   log4j-core/2.1.1/log4j-core-2.1.1.jar` lands at `REPOSITORY/org/apache/logging/
   log4j/log4j-core/2.1.1/log4j-core-2.1.1.jar`, so each build/artifact/version is
   naturally separated in the Git tree.
+- **Root mirroring**: set `git_path` to `"/"` to mirror the whole depot to the
+  repository root (no prefix folder) — e.g. `//NDPro/Dev/...` → `Dev/...`, and
+  any other top-level folder in the depot mirrors alongside it.
 - **No local storage cost**: files are fetched via `p4 print`, hashed into Git's
   object database, and staged with `git update-index` — they are **never written
   to the local workspace** and are marked `skip-worktree` so `git checkout`/

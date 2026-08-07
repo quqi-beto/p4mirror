@@ -97,6 +97,20 @@ class GitClient:
         self._run("reset", "--hard", f"origin/{self._branch}")
         self._run("clean", "-fd")
 
+    def is_branch_empty(self) -> bool:
+        """Return True if the local default branch has no commits yet.
+
+        Used by ``init`` to decide whether "no git-p4 markers found" is
+        safe (freshly cloned, empty repository) or ambiguous (existing
+        history without markers, which would create duplicate commits if
+        backfilled from CL 0).
+        """
+        try:
+            self._run("rev-parse", "--verify", "HEAD")
+            return False
+        except GitError:
+            return True
+
     def stage_all(self) -> None:
         """Stage all changes (adds, modifications, deletes) via ``git add -A``."""
         self._run("add", "-A")

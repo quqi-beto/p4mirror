@@ -17,10 +17,10 @@
             "git_path": "AppC"
         },
         {
-            "p4_path": "//REPOSITORY/...",
-            "git_path": "REPOSITORY",
+            "p4_path": "//NDPro/...",
+            "git_path": "/",
             "dynamic": true,
-            "baseline_cl": 0
+            "baseline_cl": 280878
         }
     ]
 }

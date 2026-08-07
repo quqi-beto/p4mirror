@@ -26,7 +26,9 @@ class PathMapping:
     p4_path : str
         Perforce depot path (must end with ``/...``).
     git_path : str
-        Relative Git path that *p4_path* maps to.
+        Relative Git path that *p4_path* maps to.  For ``dynamic`` mappings,
+        ``"/"`` (or empty) mirrors the whole depot to the repository root
+        (no prefix folder).
     dynamic : bool
         If ``True``, this is a *dynamic* depot mapping: the depot root is
         watched as a whole (all sub-paths are migrated with no filter), the
@@ -143,15 +145,22 @@ def load_repository_config(path: str | Path) -> RepositoryConfig:
         p4_path = _required(entry, "p4_path", f"path_mappings[{i}]")
         git_path = _required(entry, "git_path", f"path_mappings[{i}]")
         _validate_depot_path(p4_path)
-        if not git_path.strip():
-            raise ConfigError(
-                f"git_path is empty in path_mappings[{i}] of {path}"
-            )
 
         dynamic = entry.get("dynamic", False)
         if not isinstance(dynamic, bool):
             raise ConfigError(
                 f"'dynamic' must be a boolean in path_mappings[{i}] of {path}"
+            )
+
+        if dynamic:
+            # A dynamic mapping may use ``"/"`` (or an empty string) as
+            # ``git_path`` to mirror the whole depot straight to the
+            # repository root (no prefix folder).  Normalise to ``""`` so
+            # the rest of the code treats it as "root".
+            git_path = git_path.strip("/")
+        elif not git_path.strip():
+            raise ConfigError(
+                f"git_path is empty in path_mappings[{i}] of {path}"
             )
 
         baseline_cl = entry.get("baseline_cl", 0)

@@ -8,7 +8,9 @@ update state.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 from config import PathMapping, RepositoryConfig, UserMapping
@@ -244,9 +246,15 @@ def _run_migration_impl(
     # -- 7. Discover new changelists (per-path baselines) ----------------
     all_cl_ids: set[int] = set()
     for mapping in config.path_mappings:
-        path_baseline = state.get_path_cl(mapping.git_path) or 0
+        path_baseline = state.get_path_cl(mapping.git_path)
+        # Fall back to the configured baseline_cl for dynamic mappings with
+        # no state entry yet (e.g. after renaming git_path) so we never
+        # accidentally re-migrate the whole depot history from CL 0.
+        if path_baseline is None and mapping.dynamic and mapping.baseline_cl > 0:
+            path_baseline = mapping.baseline_cl
+        path_baseline = path_baseline or 0
         logger.info(
-            f"Querying {mapping.git_path} ({mapping.p4_path}) "
+            f"Querying {mapping.git_path or '(root)'} ({mapping.p4_path}) "
             f"for changes after CL {path_baseline} ..."
         )
         try:
@@ -326,7 +334,6 @@ def _run_migration_impl(
                 cl=cl,
                 depot_paths_to_sync=depot_paths_to_sync,
                 dynamic_mappings=dynamic_mappings,
-                workspace_root=workspace_root,
                 logger=logger,
             )
             commits_created += 1
@@ -385,7 +392,6 @@ def _process_one_changelist(
     cl: Changelist,
     depot_paths_to_sync: list[str],
     dynamic_mappings: list[PathMapping],
-    workspace_root: Path,
     logger: P4MirrorLogger,
 ) -> None:
     """Sync only the affected depot paths, stage, and commit a single CL.
@@ -440,7 +446,6 @@ def _process_one_changelist(
             git=git,
             cl=cl,
             mapping=mapping,
-            workspace_root=workspace_root,
             logger=logger,
         )
 
@@ -460,7 +465,6 @@ def _stage_dynamic_changelist(
     git: GitClient,
     cl: Changelist,
     mapping: PathMapping,
-    workspace_root: Path,
     logger: P4MirrorLogger,
 ) -> None:
     """Stage a changelist's files under a *dynamic* mapping without writing
@@ -493,44 +497,56 @@ def _stage_dynamic_changelist(
     logger.info(
         f"    [dynamic] {mapping.git_path}: staging {len(files)} file(s) no-checkout"
     )
-    temp_dir = workspace_root / "temp"
-    temp_dir.mkdir(parents=True, exist_ok=True)
+    # Use the OS temp dir (OUTSIDE the git working tree) so `git add -A`
+    # never sees these blob files — even if a per-file unlink fails or a
+    # file stays locked on Windows, leftover blobs cannot break staging.
+    temp_dir = Path(tempfile.mkdtemp(prefix="p4mirror_blob_"))
+    try:
+        staged = 0
+        removed = 0
+        for i, f in enumerate(files):
+            # ``prefix`` ends without the trailing "/" (p4_path[:-4] strips
+            # "/..."), so ``rel`` starts with the "/" separator — drop it to
+            # avoid a double slash in the joined Git path ("NDPro//Dev/...").
+            rel = f.path[len(prefix):].lstrip("/")  # e.g. "org/apache/.../x.jar"
+            if git_base:
+                git_path = f"{git_base}/{rel}" if rel else git_base
+            else:
+                # Root mirror (git_path was "/" or empty): files land at
+                # the repository root, preserving the P4-relative structure.
+                git_path = rel
 
-    staged = 0
-    removed = 0
-    for i, f in enumerate(files):
-        rel = f.path[len(prefix):]  # e.g. "org/apache/.../x.jar"
-        git_path = f"{git_base}/{rel}" if rel else git_base
+            if f.action in delete_actions:
+                logger.info(f"    [dynamic] delete  {git_path}")
+                try:
+                    git.update_index_remove(git_path)
+                except GitError:
+                    logger.info(
+                        f"    [dynamic] {git_path} not in index; skipping remove"
+                    )
+                removed += 1
+                continue
 
-        if f.action in delete_actions:
-            logger.info(f"    [dynamic] delete  {git_path}")
+            logger.info(f"    [dynamic] {f.action:8s} {git_path}")
+            temp_path = temp_dir / f"p4mirror_blob_{cl.cl_id}_{i}.tmp"
             try:
-                git.update_index_remove(git_path)
-            except GitError:
-                logger.info(
-                    f"    [dynamic] {git_path} not in index; skipping remove"
-                )
-            removed += 1
-            continue
+                p4.print_file(f.path, f.rev, temp_path)
+                blob = git.hash_object_from_file(temp_path)
+                mode = p4.fstat_mode(f.path, f.rev)
+                git.update_index_add(git_path, blob, mode)
+                git.mark_skip_worktree(git_path)
+            finally:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            staged += 1
 
-        logger.info(f"    [dynamic] {f.action:8s} {git_path}")
-        temp_path = temp_dir / f"p4mirror_blob_{cl.cl_id}_{i}.tmp"
-        try:
-            p4.print_file(f.path, f.rev, temp_path)
-            blob = git.hash_object_from_file(temp_path)
-            mode = p4.fstat_mode(f.path, f.rev)
-            git.update_index_add(git_path, blob, mode)
-            git.mark_skip_worktree(git_path)
-        finally:
-            try:
-                temp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-        staged += 1
-
-    logger.info(
-        f"    [dynamic] {mapping.git_path}: staged {staged}, removed {removed}"
-    )
+        logger.info(
+            f"    [dynamic] {mapping.git_path}: staged {staged}, removed {removed}"
+        )
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def _match_affected_paths(

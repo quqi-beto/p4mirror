@@ -54,6 +54,10 @@ class P4MirrorLogger:
         """Log an informational message."""
         self._write_line(f"[INFO]  {message}")
 
+    def warning(self, message: str) -> None:
+        """Log a warning message (non-fatal)."""
+        self._write_line(f"[WARN]  {message}")
+
     def error(self, message: str) -> None:
         """Log an error message."""
         self._write_line(f"[ERROR] {message}")

@@ -105,7 +105,10 @@ def _run_init_impl(
 ) -> None:
     """Internal init logic — extracted for clean error handling."""
 
-    git_paths = [m.git_path for m in config.path_mappings]
+    git_paths = [m.git_path for m in config.path_mappings if m.git_path]
+    # Root dynamic mappings use git_path "" (repo-root mirror) — excluded
+    # from the GitHub history scan (no meaningful path filter); their
+    # baseline comes from baseline_cl seeding below.
     # Dynamic mappings are never materialized (no-checkout commits), so they
     # are excluded from sparse checkout to avoid wasting local storage.
     sparse_paths = [m.git_path for m in config.path_mappings if not m.dynamic]
@@ -177,22 +180,15 @@ def _run_init_impl(
         errors.append(str(exc))
         raise InitError() from exc
 
-    if not path_cls:
-        msg = (
-            "No git-p4 markers found in the repository history. "
-            "Cannot determine the baseline Perforce changelist. "
-            f"If you know the initial CL, set it manually in "
-            f"state/state_{config.repository_name}.json "
-            "and run 'p4mirror migrate'."
-        )
-        logger.error(msg)
-        errors.append(msg)
-        raise InitError() from None
-
     # Ensure every configured path has a baseline.  Paths without a git-p4
     # marker default to 0 (the first migration discovers all CLs), except
     # for dynamic mappings which may seed a configured ``baseline_cl`` so a
     # depot can be adopted without backfilling its entire history.
+    #
+    # This runs even when *no* markers were found: an empty scan must not
+    # abort init before the configured ``baseline_cl`` gets a chance to
+    # seed state (e.g. a fresh GitHub repo, or adopting a dynamic depot
+    # with ``baseline_cl`` set).
     state_paths: dict[str, PathState] = {}
     for m in config.path_mappings:
         gp = m.git_path
@@ -207,6 +203,37 @@ def _run_init_impl(
             logger.info(f"  {gp}: baseline CL {cl}")
         else:
             logger.info(f"  {gp}: no git-p4 marker found, will start from CL 0")
+
+    if not path_cls:
+        # No git-p4 markers found anywhere in the repository history.  This
+        # is expected and safe for:
+        #   * a brand-new/empty GitHub repository (nothing migrated yet), or
+        #   * dynamic mappings being adopted via ``baseline_cl``, or
+        #     deliberately from CL 0 ("start from the beginning").
+        # It is only fatal when a *static* mapping has no baseline AND the
+        # remote already contains commits: without a marker we cannot tell
+        # how much history is already in GitHub, so backfilling from CL 0
+        # would create duplicate commits.
+        if not git.is_branch_empty() and not all(
+            m.dynamic for m in config.path_mappings
+        ):
+            msg = (
+                "No git-p4 markers found in the repository history and the "
+                "repository already contains commits, so the baseline "
+                "Perforce changelist cannot be determined safely. "
+                "If you know the initial CL, set it manually in "
+                f"state/state_{config.repository_name}.json "
+                "and run 'p4mirror migrate'."
+            )
+            logger.error(msg)
+            errors.append(msg)
+            raise InitError() from None
+
+        logger.warning(
+            "No git-p4 markers found in the repository history. "
+            "Starting each path from CL 0 or its configured baseline_cl; "
+            "the first migration will backfill from there."
+        )
 
     # -- 5. Write state file --------------------------------------------
     logger.info("Writing state file ...")
