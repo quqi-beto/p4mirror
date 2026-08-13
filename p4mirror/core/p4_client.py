@@ -401,11 +401,17 @@ class P4Client:
         description = "\n".join(desc_lines)
 
         # --- Files: lines starting with "... //" ---
+        # Note: depot paths may contain spaces (e.g. "Scanned Items Grid
+        # Library.txt"), so the path group is "//\S.*" — NOT "//\S+".
+        # "//\S" requires at least one non-space char, ".*" then spans the
+        # rest including spaces up to the "#rev" delimiter. Perforce forbids
+        # "#" in file names, so the delimiter is unambiguous (a trailing
+        # " (from //depot/source#N)" suffix on integrate lines is ignored).
         files: list[ChangedFile] = []
         for line in lines:
             stripped = line.strip()
             file_match = re.match(
-                r"^\.\.\.\s+(?P<path>//\S+)#(?P<rev>\d+)\s+(?P<action>\S+)",
+                r"^\.\.\.\s+(?P<path>//\S.*)#(?P<rev>\d+)\s+(?P<action>\S+)",
                 stripped,
             )
             if file_match:

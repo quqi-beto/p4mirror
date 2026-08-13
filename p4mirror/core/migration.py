@@ -320,7 +320,19 @@ def _run_migration_impl(
                         break
 
             if not depot_paths_to_sync and not dynamic_mappings:
-                logger.info(f"  CL {cl_id} already covered for all affected paths; skipping")
+                if not affected_git_paths:
+                    # No file matched any configured mapping. Surfacing this as
+                    # a warning (not an info-level "already covered" skip) so a
+                    # changelist is never silently dropped — usually a parser
+                    # miss (e.g. spaces in depot paths) or an unmapped path.
+                    logger.warning(
+                        f"  CL {cl_id} has no files under any configured mapping "
+                        f"({len(cl.files)} file(s) fetched); skipping"
+                    )
+                else:
+                    logger.info(
+                        f"  CL {cl_id} already covered for all affected paths; skipping"
+                    )
                 continue
 
             # 8d. Sync non-dynamic paths (working tree) + no-checkout stage
@@ -525,7 +537,7 @@ def _stage_dynamic_changelist(
                         f"    [dynamic] {git_path} not in index; skipping remove"
                     )
                 removed += 1
-                continue
+                continue 
 
             logger.info(f"    [dynamic] {f.action:8s} {git_path}")
             temp_path = temp_dir / f"p4mirror_blob_{cl.cl_id}_{i}.tmp"
