@@ -202,6 +202,18 @@ uv run python migrate.py migrate --config config/my_repo.json --build-number 123
 For backward compatibility, running ``python migrate.py`` without a
 subcommand is treated as ``python migrate.py migrate``.
 
+**Batch processing** — pass ``--max-cls N`` to process only the first *N*
+pending changelists in this run (``0`` or omitted = all of them).  Useful
+for spreading a large backlog over several days:
+
+```bash
+uv run python migrate.py --max-cls 5      # today: first 5
+uv run python migrate.py --max-cls 5      # tomorrow: next 5
+```
+
+Each limited run still commits, pushes, and updates the state file, so the
+next run resumes automatically from the last processed changelist.
+
 ## Jenkins Job Setup
 
 **Job type:** Freestyle project

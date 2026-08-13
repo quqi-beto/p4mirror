@@ -38,6 +38,7 @@ def run_migration(
     *,
     github_token: str | None = None,
     build_number: int | None = None,
+    max_cls: int | None = None,
     log_dir: str | Path = "logs",
     state_dir: str | Path = "state",
 ) -> None:
@@ -51,6 +52,9 @@ def run_migration(
         Perforce username → Git author mapping.
     build_number : int or None
         Optional Jenkins build number for logging.
+    max_cls : int or None
+        Optional maximum number of changelists to process in this run.
+        ``None``/``0`` means process all pending changelists (default).
     log_dir : str or Path
         Directory for log files.
     state_dir : str or Path
@@ -81,6 +85,7 @@ def run_migration(
             logger=logger,
             state_dir=state_dir,
             github_token=github_token,
+            max_cls=max_cls,
             errors=errors,
         )
     except MigrationError:
@@ -109,8 +114,15 @@ def _run_migration_impl(
     state_dir: str | Path,
     github_token: str | None,
     errors: list[str],
+    max_cls: int | None = None,
 ) -> tuple[int, int]:
     """Internal migration logic — extracted for clean error handling.
+
+    Parameters
+    ----------
+    max_cls : int or None
+        Optional maximum number of changelists to process this run.
+        ``None``/``0`` processes all pending changelists.
 
     Returns
     -------
@@ -278,7 +290,23 @@ def _run_migration_impl(
         logger.info("No new changelists to migrate.")
         return (0, 0)
 
-    logger.info(f"Found {len(cl_ids)} new changelist(s) in total: {cl_ids}")
+    total_pending = len(cl_ids)
+    logger.info(f"Found {total_pending} new changelist(s) in total: {cl_ids}")
+
+    # Optional batch limit (--max-cls): only process the first N changelists
+    # this run so a large backlog can be spread over several runs (e.g. the
+    # first 5 today, the rest tomorrow).  Each limited run still commits →
+    # pushes → updates state, so the next run simply resumes from the new
+    # baseline.  ``0`` / omitted means process everything.
+    truncated = False
+    if max_cls and max_cls > 0 and len(cl_ids) > max_cls:
+        cl_ids = cl_ids[:max_cls]
+        truncated = True
+        logger.info(
+            f"Batch limit --max-cls {max_cls} applied: processing the first "
+            f"{len(cl_ids)} changelist(s) this run; "
+            f"{total_pending - len(cl_ids)} remain(s) for a later run."
+        )
 
     # -- 8. Process each changelist (oldest first) -----------------------
     highest_per_path: dict[str, int] = {}
@@ -387,6 +415,13 @@ def _run_migration_impl(
         f"Migration complete: {changelists_processed} changelist(s) "
         f"processed, {commits_created} commit(s) created."
     )
+
+    if truncated:
+        logger.info(
+            f"Run limited to {changelists_processed} changelist(s) "
+            f"(--max-cls {max_cls}). Run again to process the remaining "
+            f"{total_pending - changelists_processed} changelist(s)."
+        )
 
     return (changelists_processed, commits_created)
 

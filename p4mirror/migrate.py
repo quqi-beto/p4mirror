@@ -82,6 +82,16 @@ def _parse_args() -> argparse.Namespace:
         help="Jenkins build number (optional, logged if provided)",
     )
     p_migrate.add_argument(
+        "--max-cls",
+        type=int,
+        default=0,
+        help=(
+            "Maximum number of changelists to process in this run "
+            "(0 = unlimited, the default). Use to migrate in batches, e.g. "
+            "--max-cls 5 today and run again tomorrow for the rest."
+        ),
+    )
+    p_migrate.add_argument(
         "--github-token",
         default=None,
         help=(
@@ -111,6 +121,14 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+
+    # -- Validate optional flags -----------------------------------------
+    if getattr(args, "max_cls", 0) < 0:
+        print(
+            "Configuration error: --max-cls must be >= 0 (0 = unlimited).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # -- Load config (shared) --------------------------------------------
     try:
@@ -143,6 +161,7 @@ def main() -> None:
             user_mapping=user_mapping,
             github_token=github_token,
             build_number=args.build_number,
+            max_cls=args.max_cls,
         )
 
 
