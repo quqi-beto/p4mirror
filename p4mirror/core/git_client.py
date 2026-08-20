@@ -216,6 +216,12 @@ class GitClient:
         # Only inject token into HTTPS URLs; SSH and local paths are
         # left as-is since they don't support token auth.
         if remote_url.startswith("https://"):
+            # Strip any previously embedded token so re-configuring with a
+            # fresh token never double-injects
+            # (https://x-access-token:old@... → https://...).
+            remote_url = re.sub(
+                r"^https://x-access-token:[^@/]+@", "https://", remote_url
+            )
             scheme, rest = remote_url.split("://", 1)
             auth_url = f"{scheme}://x-access-token:{token}@{rest}"
             self._run("remote", "set-url", "origin", auth_url)

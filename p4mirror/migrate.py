@@ -24,6 +24,7 @@ import os
 import sys
 
 from config import ConfigError, load_repository_config, load_user_mapping
+from core.github_auth import GitHubAppTokenProvider, GitHubTokenError
 from core.migration import run_migration
 
 
@@ -56,7 +57,38 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "GitHub token (JWT or PAT) for authenticated Git operations. "
-            "Falls back to GITHUB_TOKEN env var."
+            "Falls back to GITHUB_TOKEN env var. Ignored when --private-key "
+            "is provided (a fresh token is minted instead)."
+        ),
+    )
+    p_init.add_argument(
+        "--private-key",
+        default=None,
+        help=(
+            "Path to the GitHub App private key PEM (Jenkins secret file). "
+            "Falls back to the GITHUB_PRIVATE_KEY_PATH env var. When "
+            "provided, a FRESH installation token is generated for every run "
+            "from the GitHub App ID / installation ID "
+            "(--app-id / --installation-id) — cached/stale tokens are never "
+            "reused."
+        ),
+    )
+    p_init.add_argument(
+        "--app-id",
+        default=None,
+        help=(
+            "GitHub App ID (numeric). Falls back to the GITHUB_APP_ID env "
+            "var. Required together with --private-key to mint a fresh "
+            "installation token."
+        ),
+    )
+    p_init.add_argument(
+        "--installation-id",
+        default=None,
+        help=(
+            "GitHub App installation ID (numeric). Falls back to the "
+            "GITHUB_INSTALLATION_ID env var. Required together with "
+            "--private-key to mint a fresh installation token."
         ),
     )
 
@@ -96,7 +128,38 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "GitHub token (JWT or PAT) for authenticated Git operations. "
-            "Falls back to GITHUB_TOKEN env var."
+            "Falls back to GITHUB_TOKEN env var. Ignored when --private-key "
+            "is provided (a fresh token is minted instead)."
+        ),
+    )
+    p_migrate.add_argument(
+        "--private-key",
+        default=None,
+        help=(
+            "Path to the GitHub App private key PEM (Jenkins secret file). "
+            "Falls back to the GITHUB_PRIVATE_KEY_PATH env var. When "
+            "provided, a FRESH installation token is generated for every run "
+            "from the GitHub App ID / installation ID "
+            "(--app-id / --installation-id), and again right before the "
+            "final push — cached/stale tokens are never reused."
+        ),
+    )
+    p_migrate.add_argument(
+        "--app-id",
+        default=None,
+        help=(
+            "GitHub App ID (numeric). Falls back to the GITHUB_APP_ID env "
+            "var. Required together with --private-key to mint a fresh "
+            "installation token."
+        ),
+    )
+    p_migrate.add_argument(
+        "--installation-id",
+        default=None,
+        help=(
+            "GitHub App installation ID (numeric). Falls back to the "
+            "GITHUB_INSTALLATION_ID env var. Required together with "
+            "--private-key to mint a fresh installation token."
         ),
     )
 
@@ -137,8 +200,65 @@ def main() -> None:
         print(f"Configuration error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    # -- Resolve token: CLI arg > env var --------------------------------
-    github_token = args.github_token or os.environ.get("GITHUB_TOKEN")
+    # -- Resolve GitHub App credentials (CLI arg > env var, like GH_TOKEN) --
+    # The private key (Jenkins secret file) takes precedence as the trigger:
+    # when present, the app mints a FRESH installation token on every run
+    # (and again before the final push) instead of reusing a cached token.
+    app_id = args.app_id or os.environ.get("GITHUB_APP_ID")
+    installation_id = args.installation_id or os.environ.get(
+        "GITHUB_INSTALLATION_ID"
+    )
+    private_key_path = args.private_key or os.environ.get(
+        "GITHUB_PRIVATE_KEY_PATH"
+    )
+
+    token_provider = None
+    if private_key_path:
+        if not app_id or not installation_id:
+            print(
+                "Configuration error: --private-key requires --app-id and "
+                "--installation-id (or the GITHUB_APP_ID / "
+                "GITHUB_INSTALLATION_ID env vars) to mint a fresh token.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        try:
+            token_provider = GitHubAppTokenProvider(
+                app_id=app_id,
+                installation_id=installation_id,
+                private_key_path=private_key_path,
+            )
+        except GitHubTokenError as exc:
+            print(f"Configuration error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(
+            "GitHub token provider: fresh installation token will be minted "
+            f"(app {app_id}, installation {installation_id}) using "
+            f"private key {private_key_path} for this run.",
+            file=sys.stderr,
+        )
+
+    # Backward compatibility: --github-token > GH_TOKEN > GITHUB_TOKEN env
+    # vars (only used when no --private-key was given).
+    github_token = (
+        args.github_token
+        or os.environ.get("GH_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+    )
+
+    # -- Fail fast if no GitHub credential source is configured ----------
+    # Without a private key or a token, the first authenticated git fetch /
+    # push or GitHub API call would fail deep inside the run with a confusing
+    # auth error.  Surface a clear message now instead.
+    if token_provider is None and not github_token:
+        print(
+            "Configuration error: no GitHub credential source configured. "
+            "Provide --private-key (with --app-id / --installation-id) to "
+            "mint a fresh token, or pass --github-token, or set the "
+            "GH_TOKEN / GITHUB_TOKEN environment variable.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # -- Route to the appropriate command ---------------------------------
     if args.command == "init":
@@ -147,6 +267,7 @@ def main() -> None:
         run_init(
             config=config,
             github_token=github_token,
+            token_provider=token_provider,
         )
     else:
         # Users mapping is only needed for migration
@@ -160,6 +281,7 @@ def main() -> None:
             config=config,
             user_mapping=user_mapping,
             github_token=github_token,
+            token_provider=token_provider,
             build_number=args.build_number,
             max_cls=args.max_cls,
         )

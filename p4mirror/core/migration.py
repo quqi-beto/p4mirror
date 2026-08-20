@@ -16,6 +16,7 @@ from pathlib import Path
 from config import PathMapping, RepositoryConfig, UserMapping
 from core.changelist import ChangedFile, Changelist
 from core.git_client import GitClient, GitError, GitHubAPIError, _parse_repo_full_name
+from core.github_auth import GitHubAppTokenProvider, GitHubTokenError
 from core.logger import P4MirrorLogger
 from core.p4_client import P4Client, P4Error
 from core.state_manager import PathState, State, StateManager, StateError
@@ -37,6 +38,7 @@ def run_migration(
     user_mapping: dict[str, UserMapping],
     *,
     github_token: str | None = None,
+    token_provider: GitHubAppTokenProvider | None = None,
     build_number: int | None = None,
     max_cls: int | None = None,
     log_dir: str | Path = "logs",
@@ -50,6 +52,15 @@ def run_migration(
         Repository migration configuration.
     user_mapping : dict[str, UserMapping]
         Perforce username → Git author mapping.
+    github_token : str or None
+        GitHub token (JWT or PAT) for authenticated Git operations.
+        Falls back to the ``GITHUB_TOKEN`` environment variable if not
+        provided.  Ignored when *token_provider* is set.
+    token_provider : GitHubAppTokenProvider or None
+        When set, a **fresh** installation token is minted at the start of
+        the run and again right before the final push — a cached/stale
+        token is never reused (processing many changelists can outlive the
+        1-hour token lifetime).
     build_number : int or None
         Optional Jenkins build number for logging.
     max_cls : int or None
@@ -65,9 +76,6 @@ def run_migration(
     MigrationError
         On any fatal error during the migration process.
     """
-    if github_token is None:
-        github_token = os.environ.get("GITHUB_TOKEN")
-
     # ------------------------------------------------------------------
     # Bootstrap
     # ------------------------------------------------------------------
@@ -79,12 +87,24 @@ def run_migration(
     commits_created = 0
 
     try:
+        if token_provider is not None:
+            try:
+                github_token = token_provider.get_token()
+            except GitHubTokenError as exc:
+                msg = f"Failed to generate a fresh GitHub token: {exc}"
+                logger.error(msg)
+                errors.append(msg)
+                raise MigrationError() from exc
+        elif github_token is None:
+            github_token = os.environ.get("GITHUB_TOKEN")
+
         changelists_processed, commits_created = _run_migration_impl(
             config=config,
             user_mapping=user_mapping,
             logger=logger,
             state_dir=state_dir,
             github_token=github_token,
+            token_provider=token_provider,
             max_cls=max_cls,
             errors=errors,
         )
@@ -115,6 +135,7 @@ def _run_migration_impl(
     github_token: str | None,
     errors: list[str],
     max_cls: int | None = None,
+    token_provider: GitHubAppTokenProvider | None = None,
 ) -> tuple[int, int]:
     """Internal migration logic — extracted for clean error handling.
 
@@ -123,6 +144,10 @@ def _run_migration_impl(
     max_cls : int or None
         Optional maximum number of changelists to process this run.
         ``None``/``0`` processes all pending changelists.
+    token_provider : GitHubAppTokenProvider or None
+        When set, a fresh token is minted again immediately before the
+        final push (the changelist processing above may have outlived the
+        1-hour token lifetime).
 
     Returns
     -------
@@ -393,9 +418,22 @@ def _run_migration_impl(
     # -- 9. Push all commits ---------------------------------------------
     logger.info("Pushing commits to GitHub ...")
     try:
+        if token_provider is not None:
+            # Processing the changelists above can take longer than the
+            # 1-hour lifetime of the token minted at the start of the run,
+            # so always mint a FRESH token right before pushing and re-point
+            # the origin remote at it.
+            fresh_token = token_provider.get_9token()
+            fresh_token = token_provider.get_9token()
+            fresh_token = token_provider.get_9token()
+            fresh_token = token_provider.get_9token()
+            fresh_token = token_provider.get_9token()
+            fresh_token = token_provider.get_9token()
+            fresh_token = token_provider.get_9token()
+            git.configure_github_auth(fresh_token, config.github_url)
         git.push()
         logger.info("Push succeeded.")
-    except GitError as exc:
+    except (GitError, GitHubTokenError) as exc:
         logger.error(f"Push failed: {exc}")
         errors.append(str(exc))
         raise MigrationError() from exc

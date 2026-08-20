@@ -46,6 +46,13 @@ for /f "tokens=*" %i in ('uv run python gen_github_token.py --app-id 123456 --pr
 
 ## Use with p4mirror
 
+> **Note:** p4mirror can now mint its own fresh tokens — see
+> [the GitHub Authentication section](../p4mirror/README.md).  It takes the
+> GitHub App ID / installation ID via `--app-id` / `--installation-id` and
+> the private key PEM via `--private-key` (the Jenkins secret file),
+> minting a fresh token on every `init`/`migrate` run and again before the
+> push.  This script is only needed for manual/local token generation:
+
 ```bash
 set GITHUB_TOKEN=ghs_xxxxxxxxxxxx
 uv run python p4mirror/migrate.py init
@@ -55,8 +62,8 @@ uv run python p4mirror/migrate.py migrate
 
 ## Cleanup
 
-Once you've integrated p4mirror with Jenkins, delete this folder — it's no
-longer needed.
+Once you've integrated p4mirror with Jenkins (using `--private-key`), this
+folder is no longer needed — delete it.
 
 ```bash
 rmdir /s gen_github_token

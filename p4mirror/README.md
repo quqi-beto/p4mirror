@@ -160,23 +160,66 @@ via `p4 user -o`.
 ## GitHub Authentication
 
 P4Mirror authenticates with GitHub by embedding a token into the Git remote
-URL.  The token can be provided via the ``--github-token`` CLI flag or the
-``GITHUB_TOKEN`` environment variable.
+URL (``https://x-access-token:{token}@github.com/...``).
+
+**Fresh tokens are always used — cached/stale tokens are never reused:**
+
+- A new installation access token (``ghs_...``) is minted at the start of
+  **every** ``init`` and ``migrate`` run.
+- A **second fresh token** is minted immediately before the final
+  ``git push``, because processing many changelists can take longer than
+  the 1-hour lifetime of an installation token — the token minted at the
+  start of the run would otherwise be invalid by push time.
+
+### Recommended: GitHub App credentials (fresh token per run)
+
+Supply the GitHub App **App ID**, **installation ID** and the private key
+PEM path — each can come from a CLI argument **or** an environment
+variable (CLI wins, exactly like ``--github-token`` / ``GH_TOKEN``):
+
+| Credential | CLI flag | Environment variable |
+|------------|----------|----------------------|
+| App ID | ``--app-id`` | ``GITHUB_APP_ID`` |
+| Installation ID | ``--installation-id`` | ``GITHUB_INSTALLATION_ID`` |
+| Private key path | ``--private-key`` | ``GITHUB_PRIVATE_KEY_PATH`` |
+
+```bash
+# Via CLI arguments (typical for Jenkins)
+uv run python migrate.py init \
+    --app-id 123456 \
+    --installation-id 789012 \
+    --private-key "%PRIVATE_KEY_PATH%"
+
+# Via environment variables
+set GITHUB_APP_ID=123456
+set GITHUB_INSTALLATION_ID=789012
+set GITHUB_PRIVATE_KEY_PATH=app.private-key.pem
+uv run python migrate.py migrate
+```
+
+When the private key is available (via ``--private-key`` or
+``GITHUB_PRIVATE_KEY_PATH``), a **fresh** token is minted for every run
+(and again before the push); the ``--github-token`` flag and the
+``GITHUB_TOKEN`` / ``GH_TOKEN`` environment variables are ignored.
+
+### Alternative: a pre-generated token (backward compatible)
 
 ```bash
 # Via CLI flag
 uv run python migrate.py init --github-token "ghs_xxxxxxxxxxxx"
 
-# Via environment variable (recommended for Jenkins)
+# Via environment variable
 set GITHUB_TOKEN=ghs_xxxxxxxxxxxx
 uv run python migrate.py init
 ```
 
-For a **GitHub App**, use the app's JWT as the token. Git will authenticate
-using ``https://x-access-token:{token}@github.com/...``.
-
 The token is required whenever P4Mirror needs to fetch from or push to
 GitHub — i.e. both ``init`` and ``migrate`` commands.
+
+If **no** credential source is configured (no private key, no
+``--github-token``, and no ``GH_TOKEN`` / ``GITHUB_TOKEN``), the app fails
+fast with a clear ``Configuration error: no GitHub credential source
+configured ...`` message instead of dying later at a git/GitHub call.
 
 ## Usage
 
@@ -220,13 +263,38 @@ next run resumes automatically from the last processed changelist.
 
 **Build trigger:** Poll SCM or Perforce trigger
 
-**Build step** — Execute Windows batch command:
+**GitHub App private key:** add the private key PEM as a **secret file**
+credential (e.g. `github-app-key`).
+
+**Build step** — Execute Windows batch command. Bind the secret file
+credential to an environment variable (e.g. `PRIVATE_KEY_PATH`) and the
+App ID / installation ID to environment variables (e.g. from Jenkins build
+parameters), so a **fresh** token is minted on every run.
+
+With env vars set, no flags are needed:
 
 ```batch
 @echo off
 cd /d D:\Jenkins\ApplicationA
-uv run python migrate.py
+set GITHUB_APP_ID=%GITHUB_APP_ID%
+set GITHUB_INSTALLATION_ID=%GITHUB_INSTALLATION_ID%
+set GITHUB_PRIVATE_KEY_PATH=%PRIVATE_KEY_PATH%
+uv run python migrate.py migrate
 ```
+
+Or pass everything explicitly:
+
+```batch
+@echo off
+cd /d D:\Jenkins\ApplicationA
+uv run python migrate.py migrate ^
+    --app-id %GITHUB_APP_ID% ^
+    --installation-id %GITHUB_INSTALLATION_ID% ^
+    --private-key "%PRIVATE_KEY_PATH%"
+```
+
+For the one-time initialisation, use `init` instead of `migrate` (same
+credentials).
 
 No Pipeline script required.
 
@@ -341,6 +409,7 @@ P4Mirror/
 │   ├── __init__.py
 │   ├── changelist.py         # Changelist data model
 │   ├── git_client.py         # Git CLI wrapper
+│   ├── github_auth.py        # Fresh GitHub App token minting
 │   ├── initializer.py        # One-time workspace init
 │   ├── logger.py             # Timestamped logging
 │   ├── migration.py          # Orchestration logic

@@ -15,6 +15,7 @@ from pathlib import Path
 
 from config import RepositoryConfig
 from core.git_client import GitClient, GitError, GitHubAPIError, _parse_repo_full_name
+from core.github_auth import GitHubAppTokenProvider, GitHubTokenError
 from core.logger import P4MirrorLogger
 from core.p4_client import P4Client, P4Error
 from core.state_manager import PathState, State, StateManager, StateError
@@ -34,6 +35,7 @@ def run_init(
     config: RepositoryConfig,
     *,
     github_token: str | None = None,
+    token_provider: GitHubAppTokenProvider | None = None,
     log_dir: str | Path = "logs",
     state_dir: str | Path = "state",
 ) -> None:
@@ -46,7 +48,10 @@ def run_init(
     github_token : str or None
         GitHub token (JWT or PAT) for authenticated Git operations.
         Falls back to the ``GITHUB_TOKEN`` environment variable if not
-        provided.
+        provided.  Ignored when *token_provider* is set.
+    token_provider : GitHubAppTokenProvider or None
+        When set, a **fresh** installation token is minted for this run
+        (a cached/stale token is never reused).
     log_dir : str or Path
         Directory for log files.
     state_dir : str or Path
@@ -57,14 +62,23 @@ def run_init(
     InitError
         On any fatal error during initialisation.
     """
-    if github_token is None:
-        github_token = os.environ.get("GITHUB_TOKEN")
     logger = P4MirrorLogger(log_dir=log_dir)
     logger.start()
 
     errors: list[str] = []
 
     try:
+        if token_provider is not None:
+            try:
+                github_token = token_provider.get_token()
+            except GitHubTokenError as exc:
+                msg = f"Failed to generate a fresh GitHub token: {exc}"
+                logger.error(msg)
+                errors.append(msg)
+                raise InitError() from exc
+        elif github_token is None:
+            github_token = os.environ.get("GITHUB_TOKEN")
+
         _run_init_impl(
             config=config,
             logger=logger,

@@ -5,4 +5,5 @@ description = "Incremental Perforce to GitHub Migration Framework"
 requires-python = ">=3.10"
 dependencies = [
     "certifi>=2024.0.0",
+    "pyjwt[crypto]>=2.0",
 ]
